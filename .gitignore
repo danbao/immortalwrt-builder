@@ -1,0 +1,13 @@
+dist/
+build/
+build-out/
+/imagebuilder/
+*.tar.zst
+__pycache__/
+*.pyc
+*.ova
+*.ovf
+*.vmdk
+*.mf
+*.sha256
+.DS_Store

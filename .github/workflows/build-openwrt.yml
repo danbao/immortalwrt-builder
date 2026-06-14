@@ -1,0 +1,130 @@
+name: Build OpenWrt
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Sunday 02:00 Asia/Shanghai
+    - cron: "0 18 * * 6"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-openwrt
+  cancel-in-progress: false
+
+env:
+  IB_VERSION: "24.10.6"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext \
+            libssl-dev xsltproc rsync wget unzip python3 zstd qemu-utils
+
+      - name: Download ImageBuilder
+        run: |
+          wget -q "https://downloads.immortalwrt.org/releases/${IB_VERSION}/targets/x86/64/immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
+          tar --zstd -xf "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
+          mv "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64" imagebuilder
+
+      - name: Disable auxiliary image formats
+        run: |
+          cd imagebuilder
+          sed -i \
+            -e 's/^CONFIG_ISO_IMAGES=y/# CONFIG_ISO_IMAGES is not set/' \
+            -e 's/^CONFIG_QCOW2_IMAGES=y/# CONFIG_QCOW2_IMAGES is not set/' \
+            -e 's/^CONFIG_VDI_IMAGES=y/# CONFIG_VDI_IMAGES is not set/' \
+            -e 's/^CONFIG_VMDK_IMAGES=y/# CONFIG_VMDK_IMAGES is not set/' \
+            -e 's/^CONFIG_VHDX_IMAGES=y/# CONFIG_VHDX_IMAGES is not set/' \
+            .config
+          grep -E "^(CONFIG_(ISO|QCOW2|VDI|VMDK|VHDX)_IMAGES|# CONFIG_(ISO|QCOW2|VDI|VMDK|VHDX)_IMAGES)" .config
+
+      - name: Configure third-party package feeds
+        run: |
+          cd imagebuilder
+          cat >> repositories.conf <<'EOF'
+          src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki
+          src/gz momo https://momomomo.pages.dev/openwrt-24.10/x86_64/momo
+          src/gz passwall2 https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall2
+          src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall_packages
+          EOF
+          sed -i '/option check_signature/d' repositories.conf
+
+      - name: Add local packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd imagebuilder
+          gh release download --repo asvow/luci-app-tailscale --pattern '*_all.ipk' --dir packages
+          gh release download --repo sbwml/luci-app-mosdns --pattern 'x86_64-openwrt-24.10.tar.gz' --dir /tmp/mosdns
+          mkdir -p /tmp/mosdns/extract
+          tar -xzf /tmp/mosdns/x86_64-openwrt-24.10.tar.gz -C /tmp/mosdns/extract
+          find /tmp/mosdns/extract -name '*.ipk' -exec mv {} packages/ \;
+          ls -lh packages/
+
+      - name: Build image
+        run: |
+          mkdir -p imagebuilder/files/etc/sysctl.d
+          printf 'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n' \
+            > imagebuilder/files/etc/sysctl.d/99-bbr.conf
+          cd imagebuilder
+          make image PROFILE="generic" FILES="files/" ROOTFS_PARTSIZE="1024" PACKAGES="\
+            luci luci-i18n-base-zh-cn luci-theme-argon \
+            luci-app-passwall2 luci-app-mosdns luci-app-openclash \
+            luci-app-nikki luci-app-momo luci-app-vlmcsd \
+            luci-app-tailscale tailscale luci-app-zerotier zerotier \
+            kmod-vmxnet3 open-vm-tools kmod-igb kmod-e1000e \
+            kmod-tcp-bbr kmod-tun irqbalance luci-app-upnp \
+            ip-full ca-bundle curl htop ethtool kmod-fs-ext4 kmod-fs-exfat \
+            openssh-sftp-server tcpdump mtr iperf3 bind-dig"
+
+      - name: Collect image
+        run: |
+          image="$(ls imagebuilder/bin/targets/x86/64/*squashfs-combined-efi.img.gz)"
+          mkdir -p build-out
+          cp "${image}" build-out/immortalwrt-x86-64.img.gz
+          ls -lh build-out/
+
+      - name: Convert to OVA
+        id: convert
+        run: |
+          python3 scripts/openwrt_img_to_ova.py scan \
+            --img-dir build-out \
+            --manifest manifests/converted-images.json \
+            --out-dir dist \
+            --results dist/build-results.json \
+            --nic-count 1
+          count="$(python3 -c 'import json; print(len(json.load(open("dist/build-results.json"))["built"]))')"
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish release
+        if: steps.convert.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/publish_releases.py dist/build-results.json
+          tag="$(python3 -c 'import json; print(json.load(open("dist/build-results.json"))["built"][0]["release_tag"])')"
+          gh release upload "${tag}" build-out/immortalwrt-x86-64.img.gz
+
+      - name: Record converted images
+        if: steps.convert.outputs.count != '0'
+        run: |
+          python3 scripts/openwrt_img_to_ova.py record \
+            --results dist/build-results.json \
+            --manifest manifests/converted-images.json \
+            --doc docs/converted-images.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifests/converted-images.json docs/converted-images.md
+          git commit -m "docs: record converted OpenWrt images [skip ci]" || exit 0
+          git push origin "HEAD:${GITHUB_REF_NAME}"
