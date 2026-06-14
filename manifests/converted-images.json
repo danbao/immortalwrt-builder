@@ -1,6 +1,14 @@
 {
   "builder_version": "3",
   "conversions": {
+    "03b7fe49144808198e82e830825a41239a49737e776913b9b16cffe94861f9dd:3": {
+      "builder_version": "3",
+      "checksum_asset": "immortalwrt-x86-64-esxi-03b7fe491448.ova.sha256",
+      "image_path": "build-out/immortalwrt-x86-64.img.gz",
+      "image_sha256": "03b7fe49144808198e82e830825a41239a49737e776913b9b16cffe94861f9dd",
+      "ova_asset": "immortalwrt-x86-64-esxi-03b7fe491448.ova",
+      "release_tag": "openwrt-immortalwrt-x86-64-03b7fe491448"
+    },
     "78310b5b8f4e258884ebd7a428529d510eae19c0754f1642e602b83300b80db0:3": {
       "builder_version": "3",
       "checksum_asset": "immortalwrt-x86-64-esxi-78310b5b8f4e.ova.sha256",
