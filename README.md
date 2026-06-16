@@ -15,7 +15,7 @@ Bundled packages: PassWall 2, MosDNS, OpenClash, vlmcsd (KMS), Nikki, Tailscale,
 
 Note: Nikki and Momo are mutually exclusive transparent-proxy stacks here; this image keeps Nikki (Mihomo) and omits Momo (sing-box) to avoid nftables rule conflicts.
 
-Bypass-router defaults baked into the image: forwarding sysctl tuning under `files/etc/sysctl.d/` and a `uci-defaults` script that disables DHCP/RA on LAN, sets the hostname/timezone/NTP defaults, and enables packet steering. The root filesystem is sized at 4096 MB. After importing, set a LAN IP that does not collide with your main router.
+Bypass-router defaults baked into the image: forwarding sysctl tuning under `files/etc/sysctl.d/` and a `uci-defaults` script that disables DHCP/RA on LAN, sets the hostname/timezone/NTP defaults, selects Argon as the default LuCI theme, and enables packet steering. The root filesystem is sized at 4096 MB. After importing, set a LAN IP that does not collide with your main router.
 
 ## Importing
 

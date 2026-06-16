@@ -21,6 +21,12 @@ uci -q add_list system.ntp.server='cn.pool.ntp.org'
 uci -q add_list system.ntp.server='pool.ntp.org'
 uci -q commit system
 
+if ! uci -q get luci.main >/dev/null; then
+	uci -q set luci.main='core'
+fi
+uci -q set luci.main.mediaurlbase='/luci-static/argon'
+uci -q commit luci
+
 if ! uci -q get network.globals >/dev/null; then
 	uci -q set network.globals='globals'
 fi
