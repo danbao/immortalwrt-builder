@@ -12,6 +12,14 @@
 - `.ova.sha256`：OVA 文件的 SHA256 校验值。
 - `.img.gz`：ImageBuilder 生成的原始压缩镜像，可用于 PVE 或其他支持 raw 镜像导入的环境。
 
+Release tag 使用构建日期、ImmortalWrt commit 和镜像 SHA 标识版本：
+
+```text
+openwrt-immortalwrt-x86-64-YYYYMMDD-<immortalwrt_commit>-<image_sha12>
+```
+
+例如 `openwrt-immortalwrt-x86-64-20260616-cf234f8de6d5-03b7fe491448`。
+
 默认虚拟硬件由转换脚本生成：
 
 - 2 vCPU
@@ -37,16 +45,17 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 1. 安装 Ubuntu runner 依赖，包括 ImageBuilder 所需工具和 `qemu-utils`。
 2. 下载 `immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst`。
-3. 关闭 ISO、qcow2、VDI、VMDK、VHDX 等辅助镜像格式，只保留后续需要的 raw image。
-4. 追加第三方软件源，并关闭 `repositories.conf` 中的签名检查项。
-5. 下载本地 `.ipk` 包，包括 `luci-app-tailscale` 和 MosDNS 离线包。
-6. 使用 `make image PROFILE="generic"` 构建 squashfs UEFI 镜像。
-7. 将生成的 `*squashfs-combined-efi.img.gz` 复制为 `build-out/immortalwrt-x86-64.img.gz`。
-8. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA。
-9. 调用 `scripts/publish_releases.py` 创建 GitHub Release，并上传 `.img.gz`。
-10. 调用 `record` 更新 `manifests/converted-images.json` 和 `docs/converted-images.md`，再由 workflow 提交记录。
+3. 读取官方 `version.buildinfo`，采集 `r33869-cf234f8de6d5` 这类版本码，并提取 ImmortalWrt commit。
+4. 关闭 ISO、qcow2、VDI、VMDK、VHDX 等辅助镜像格式，只保留后续需要的 raw image。
+5. 追加第三方软件源，并关闭 `repositories.conf` 中的签名检查项。
+6. 下载本地 `.ipk` 包，包括 `luci-app-tailscale` 和 MosDNS 离线包。
+7. 使用 `make image PROFILE="generic"` 构建 squashfs UEFI 镜像。
+8. 将生成的 `*squashfs-combined-efi.img.gz` 复制为 `build-out/immortalwrt-x86-64.img.gz`。
+9. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，并传入构建日期、ImmortalWrt 版本码和 commit。
+10. 调用 `scripts/publish_releases.py` 创建 GitHub Release，并上传 `.img.gz`。
+11. 调用 `record` 更新 `manifests/converted-images.json` 和 `docs/converted-images.md`，再由 workflow 提交记录。
 
-转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换。
+转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。
 
 ## 内置组件与运行注意事项
 
@@ -97,6 +106,20 @@ python3 scripts/openwrt_img_to_ova.py scan \
   --nic-count 1
 ```
 
+如果需要在本地生成与 CI 一致的 release tag，可以显式传入元数据：
+
+```bash
+python3 scripts/openwrt_img_to_ova.py scan \
+  --img-dir <dir-with-img-files> \
+  --manifest manifests/converted-images.json \
+  --out-dir dist \
+  --results dist/build-results.json \
+  --nic-count 1 \
+  --release-date 20260616 \
+  --immortalwrt-version-code r33869-cf234f8de6d5 \
+  --immortalwrt-commit cf234f8de6d5
+```
+
 转换完成后，`dist/` 会包含 `.ova`、`.ovf`、`.vmdk`、`.mf` 和 `.ova.sha256`。如果这些产物已经发布，可以更新转换记录：
 
 ```bash
@@ -116,7 +139,7 @@ python3 scripts/publish_releases.py dist/build-results.json
 
 ## 维护指南
 
-核心脚本保持无第三方 Python 依赖，优先使用标准库和显式 subprocess 参数列表。修改转换逻辑、OVF 模板、虚拟硬件默认值或产物命名规则时，必须同步递增 `scripts/openwrt_img_to_ova.py` 中的 `BUILDER_VERSION`，否则旧 manifest 记录可能导致新逻辑不被重新应用。
+核心脚本保持无第三方 Python 依赖，优先使用标准库和显式 subprocess 参数列表。修改转换逻辑、OVF 模板、虚拟硬件默认值、Release tag 或产物命名规则时，必须同步递增 `scripts/openwrt_img_to_ova.py` 中的 `BUILDER_VERSION`，否则旧 manifest 记录可能导致新逻辑不被重新应用。
 
 不要提交构建产物。以下路径和文件类型应保持忽略状态：
 
@@ -137,7 +160,7 @@ python3 scripts/publish_releases.py dist/build-results.json
 
 `make image` 失败并提示找不到包：检查 workflow 中的 `PACKAGES` 列表、第三方 feed URL、release ipk 下载步骤是否仍然可用。
 
-`skip already converted`：当前镜像 SHA256 和 `BUILDER_VERSION` 已存在于 `manifests/converted-images.json`。如果转换逻辑确实变了，先递增 `BUILDER_VERSION`。
+`skip already converted`：当前镜像 SHA256 和 `BUILDER_VERSION` 已存在于 `manifests/converted-images.json`。如果转换逻辑或 Release tag 规则确实变了，先递增 `BUILDER_VERSION`。
 
 GitHub Release 已存在：`publish_releases.py` 会跳过已有 tag，适合重复运行。
 

@@ -27,13 +27,18 @@ def publish_item(item: dict[str, str]) -> None:
 
     ova = Path(item["ova_path"])
     checksum = Path(item["checksum_path"])
-    notes = "\n".join(
-        [
-            f"Image: `{Path(item['image_path']).name}`",
-            f"Image SHA256: `{item['image_sha256']}`",
-            f"Builder version: `{item['builder_version']}`",
-        ]
-    )
+    note_lines = [
+        f"Image: `{Path(item['image_path']).name}`",
+        f"Image SHA256: `{item['image_sha256']}`",
+        f"Builder version: `{item['builder_version']}`",
+    ]
+    if item.get("release_date"):
+        note_lines.insert(0, f"Build date: `{item['release_date']}`")
+    if item.get("immortalwrt_version_code"):
+        note_lines.insert(1, f"ImmortalWrt version: `{item['immortalwrt_version_code']}`")
+    if item.get("immortalwrt_commit"):
+        note_lines.insert(2, f"ImmortalWrt commit: `{item['immortalwrt_commit']}`")
+    notes = "\n".join(note_lines)
     command = [
         "gh",
         "release",
