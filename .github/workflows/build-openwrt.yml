@@ -70,7 +70,6 @@ jobs:
           cd imagebuilder
           cat >> repositories.conf <<'EOF'
           src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki
-          src/gz momo https://momomomo.pages.dev/openwrt-24.10/x86_64/momo
           src/gz passwall2 https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall2
           src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall_packages
           EOF
@@ -91,48 +90,10 @@ jobs:
       - name: Build image
         run: |
           cd imagebuilder
-          mkdir -p files/etc/sysctl.d files/etc/uci-defaults
-          cat > files/etc/sysctl.d/99-bypass-router.conf <<'EOF'
-          # BBR congestion control
-          net.core.default_qdisc=fq
-          net.ipv4.tcp_congestion_control=bbr
-          # Forwarding (bypass router core duty)
-          net.ipv4.ip_forward=1
-          net.ipv6.conf.all.forwarding=1
-          # Raise conntrack limit for proxy connection storms
-          net.netfilter.nf_conntrack_max=65536
-          # TCP Fast Open
-          net.ipv4.tcp_fastopen=3
-          # Larger socket buffers for high-throughput forwarding
-          net.core.rmem_max=67108864
-          net.core.wmem_max=67108864
-          net.core.rmem_default=262144
-          net.core.wmem_default=262144
-          net.ipv4.tcp_rmem=4096 87380 67108864
-          net.ipv4.tcp_wmem=4096 65536 67108864
-          # Don't send/accept ICMP redirects
-          net.ipv4.conf.all.send_redirects=0
-          net.ipv4.conf.default.send_redirects=0
-          net.ipv4.conf.all.accept_redirects=0
-          net.ipv4.conf.default.accept_redirects=0
-          # Loose reverse-path filter (bypass traffic returns from unexpected interfaces)
-          net.ipv4.conf.all.rp_filter=2
-          net.ipv4.conf.default.rp_filter=2
-          EOF
-          cat > files/etc/uci-defaults/99-bypass-router.sh <<'EOF'
-          #!/bin/sh
-          # Bypass router: don't run DHCP/RA — the main router owns address assignment.
-          uci set dhcp.lan.ignore=1
-          uci set dhcp.lan.ra='disabled'
-          uci set dhcp.lan.dhcpv6='disabled'
-          uci commit dhcp
-          exit 0
-          EOF
-          chmod +x files/etc/uci-defaults/99-bypass-router.sh
-          make image PROFILE="generic" FILES="files/" ROOTFS_PARTSIZE="1024" PACKAGES="\
+          make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="4096" PACKAGES="\
             luci luci-i18n-base-zh-cn luci-theme-argon \
             luci-app-passwall2 luci-app-mosdns luci-app-openclash \
-            luci-app-nikki luci-app-momo luci-app-vlmcsd \
+            luci-app-nikki luci-i18n-nikki-zh-cn mihomo-meta luci-app-vlmcsd \
             luci-app-tailscale tailscale luci-app-zerotier zerotier \
             kmod-vmxnet3 open-vm-tools kmod-igb kmod-e1000e \
             kmod-tcp-bbr kmod-tun irqbalance luci-app-upnp kmod-nft-offload \

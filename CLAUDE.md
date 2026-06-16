@@ -39,9 +39,9 @@ There are no tests or linters configured. Scripts are stdlib-only Python 3 (no p
 
 One job, triggered by `workflow_dispatch` or a daily schedule. Steps in order:
 
-1. **ImageBuilder assembly** — release pinned via `IB_VERSION` env (e.g. `24.10.6`); auxiliary image formats (ISO/qcow2/VDI/VMDK/VHDX) are sed-disabled in the IB `.config` because each needs extra host tools (xorriso, qemu-img) and nothing downstream consumes them. Image built with `make image PROFILE=generic ROOTFS_PARTSIZE=1024 PACKAGES=...` — **a nonexistent package name fails the build loudly**.
+1. **ImageBuilder assembly** — release pinned via `IB_VERSION` env (e.g. `24.10.6`); auxiliary image formats (ISO/qcow2/VDI/VMDK/VHDX) are sed-disabled in the IB `.config` because each needs extra host tools (xorriso, qemu-img) and nothing downstream consumes them. Image built with `make image PROFILE=generic ROOTFS_PARTSIZE=4096 FILES=${GITHUB_WORKSPACE}/files PACKAGES=...` — **a nonexistent package name fails the build loudly**.
 2. **Release metadata** — reads upstream `version.buildinfo` for values like `r33869-cf234f8de6d5`, extracts the ImmortalWrt commit, and combines it with the Asia/Shanghai build date for release tags and asset names like `openwrt-immortalwrt-x86-64-20260616-cf234f8de6d5-<image_sha12>` and `immortalwrt-x86-64-esxi-20260616-cf234f8de6d5-<image_sha12>.ova`.
-3. **Third-party packages** — feeds appended to `repositories.conf` (nikki/momo `*.pages.dev`, passwall2 SourceForge; signature checking disabled); release ipks downloaded into `packages/` (sbwml MosDNS offline bundle — chosen over the kiddin9 dl.openwrt.ai feed which intermittently fails from runners; asvow `luci-app-tailscale`). Bypass-router tuning via `files/`: a sysctl overlay (BBR, raised conntrack limit, larger socket buffers, loose rp_filter, no redirects) and a `uci-defaults` script that disables DHCP/RA on LAN (the main router owns address assignment).
+3. **Third-party packages** — feeds appended to `repositories.conf` (Nikki pages.dev and passwall2 SourceForge; signature checking disabled); release ipks downloaded into `packages/` (sbwml MosDNS offline bundle — chosen over the kiddin9 dl.openwrt.ai feed which intermittently fails from runners; asvow `luci-app-tailscale`). Bypass-router tuning via `files/`: a sysctl overlay (BBR, raised conntrack limit, larger socket buffers, loose rp_filter, no redirects) and a `uci-defaults` script that disables DHCP/RA on LAN, sets hostname/timezone/NTP, selects Argon as the default LuCI theme, and enables packet steering.
 4. **Convert to OVA** — reuses `scripts/openwrt_img_to_ova.py scan` against `build-out/`, passing build date, ImmortalWrt version code, and commit metadata.
 5. **Publish** — `scripts/publish_releases.py` creates the Release (skips existing tags, so re-runs are safe), prunes old managed releases to keep the latest 30, then `gh release upload` attaches the raw `.img.gz`.
 6. **Record** — manifest + docs committed back to the branch.
@@ -63,5 +63,5 @@ Release cleanup is intentionally scoped to automatic tags matching `openwrt-immo
 
 ### Runtime notes
 
-- Nikki and Momo are both installed but mutually exclusive at runtime (conflicting transparent-proxy nft rules).
+- Nikki is installed as the retained transparent-proxy stack; Momo is intentionally omitted because Nikki and Momo have conflicting transparent-proxy nft rules.
 - Generated artifacts (`dist/`, `build-out/`, `imagebuilder/`, `*.ova`, `*.vmdk`, etc.) are gitignored.

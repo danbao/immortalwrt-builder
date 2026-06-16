@@ -57,7 +57,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 4. 关闭 ISO、qcow2、VDI、VMDK、VHDX 等辅助镜像格式，只保留后续需要的 raw image。
 5. 追加第三方软件源，并关闭 `repositories.conf` 中的签名检查项。
 6. 下载本地 `.ipk` 包，包括 `luci-app-tailscale` 和 MosDNS 离线包。
-7. 使用 `make image PROFILE="generic"` 构建 squashfs UEFI 镜像。
+7. 使用 `make image PROFILE="generic" ROOTFS_PARTSIZE="4096"` 构建 squashfs UEFI 镜像。
 8. 将生成的 `*squashfs-combined-efi.img.gz` 复制为 `build-out/immortalwrt-x86-64.img.gz`。
 9. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，并传入构建日期、ImmortalWrt 版本码和 commit。
 10. 调用 `scripts/publish_releases.py` 创建 GitHub Release，并按带日期和 commit 的资产名上传 `.img.gz`。
@@ -69,20 +69,19 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 固件面向旁路由场景，内置常用代理、网络和诊断组件：
 
-- LuCI 中文界面和 Argon 主题
+- LuCI 中文界面和默认 Argon 主题
 - PassWall 2
 - MosDNS
 - OpenClash
 - Nikki
-- Momo
 - Tailscale
 - ZeroTier
 - vlmcsd
-- UPnP、irqbalance、nftables flow offload
+- UPnP、irqbalance，以及可供运行时测试的 nftables flow offload 内核模块
 - `luci-app-statistics` 和常用 collectd 模块
 - `curl`、`htop`、`tcpdump`、`mtr`、`iperf3`、`bind-dig` 等诊断工具
 
-注意：Nikki 和 Momo 都被打入固件，但它们的透明代理 nftables 规则存在冲突。运行时只启用其中一个。
+注意：Nikki 和 Momo 属于互斥的透明代理栈，它们的 nftables 规则存在冲突。本镜像保留 Nikki（Mihomo）并省略 Momo（sing-box），避免默认固件里两套透明代理规则互相打架。
 
 固件内置旁路由调优：
 
@@ -92,6 +91,10 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 - 禁止 ICMP redirect。
 - 使用 loose `rp_filter`。
 - 默认关闭 LAN DHCP、RA 和 DHCPv6，由主路由负责地址分配。
+- 默认主机名为 `immortalwrt-bypass`，时区为 `Asia/Shanghai`，NTP 使用中国大陆和通用池混合服务器。
+- 默认选择 Argon 作为 LuCI 主题。
+- 启用 packet steering；`kmod-nft-offload` 仅预装供运行时测试，不默认开启 flow offload。
+- 根分区大小为 4096 MB。
 
 导入虚拟机后，请为 LAN 配置一个不与主路由冲突的静态地址。
 
