@@ -169,7 +169,9 @@ jobs:
         run: |
           python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
           tag="$(python3 -c 'import json; print(json.load(open("dist/build-results.json"))["built"][0]["release_tag"])')"
-          gh release upload "${tag}" build-out/immortalwrt-x86-64.img.gz
+          image_asset="$(python3 -c 'import json; print(json.load(open("dist/build-results.json"))["built"][0]["image_asset"])')"
+          cp build-out/immortalwrt-x86-64.img.gz "dist/${image_asset}"
+          gh release upload "${tag}" "dist/${image_asset}" --clobber
 
       - name: Record converted images
         if: steps.convert.outputs.count != '0'

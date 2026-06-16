@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "4"
+BUILDER_VERSION = "5"
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,7 @@ class BuildResult:
     key: str
     release_tag: str
     release_title: str
+    image_asset: str
     release_date: str | None
     immortalwrt_version_code: str | None
     immortalwrt_commit: str | None
@@ -218,26 +219,31 @@ def build_image(
     short_image = image_sha[:12]
     key = f"{image_sha}:{BUILDER_VERSION}"
     if release_date and immortalwrt_commit:
+        release_date = sanitize_tag_component(release_date)
+        immortalwrt_commit = sanitize_tag_component(immortalwrt_commit)
         release_tag = "openwrt-{base}-{date}-{commit}-{image}".format(
             base=base_name,
-            date=sanitize_tag_component(release_date),
-            commit=sanitize_tag_component(immortalwrt_commit),
+            date=release_date,
+            commit=immortalwrt_commit,
             image=short_image,
         )
-        release_title_suffix = immortalwrt_version_code or immortalwrt_commit
-        release_title = f"{base_name} ESXi OVA ({release_date}, {release_title_suffix})"
+        artifact_name = f"{base_name}-{release_date}-{immortalwrt_commit}-{short_image}"
+        release_title = f"ImmortalWrt x86_64 ESXi OVA - {release_date} {immortalwrt_commit}"
     else:
         release_tag = f"openwrt-{base_name}-{short_image}"
         release_title = f"{base_name} ESXi OVA ({short_image})"
+        artifact_name = f"{base_name}-{short_image}"
+    image_asset = f"{artifact_name}.img.gz"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="openwrt-img-to-ova-") as tmp_s:
         tmp = Path(tmp_s)
         raw = tmp / f"{base_name}.img"
-        vmdk = out_dir / f"{base_name}-esxi-{short_image}.vmdk"
-        ovf = out_dir / f"{base_name}-esxi-{short_image}.ovf"
-        mf = out_dir / f"{base_name}-esxi-{short_image}.mf"
-        ova = out_dir / f"{base_name}-esxi-{short_image}.ova"
+        esxi_artifact_name = f"{base_name}-esxi-{artifact_name.removeprefix(base_name + '-')}"
+        vmdk = out_dir / f"{esxi_artifact_name}.vmdk"
+        ovf = out_dir / f"{esxi_artifact_name}.ovf"
+        mf = out_dir / f"{esxi_artifact_name}.mf"
+        ova = out_dir / f"{esxi_artifact_name}.ova"
         checksum = out_dir / f"{ova.name}.sha256"
 
         decompress_image(image, raw)
@@ -252,6 +258,7 @@ def build_image(
         key=key,
         release_tag=release_tag,
         release_title=release_title,
+        image_asset=image_asset,
         release_date=release_date,
         immortalwrt_version_code=immortalwrt_version_code,
         immortalwrt_commit=immortalwrt_commit,
@@ -270,6 +277,7 @@ def result_to_dict(result: BuildResult) -> dict[str, str]:
         "key": result.key,
         "release_tag": result.release_tag,
         "release_title": result.release_title,
+        "image_asset": result.image_asset,
         "release_date": result.release_date or "",
         "immortalwrt_version_code": result.immortalwrt_version_code or "",
         "immortalwrt_commit": result.immortalwrt_commit or "",
@@ -349,6 +357,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     for item in results.get("built", []):
         conversions[item["key"]] = {
             "image_path": item["image_path"],
+            "image_asset": item.get("image_asset", Path(item["image_path"]).name),
             "image_sha256": item["image_sha256"],
             "builder_version": item["builder_version"],
             "release_tag": item["release_tag"],
@@ -374,7 +383,7 @@ def write_converted_doc(path: Path, manifest: dict) -> None:
                 date=item.get("release_date") or "_unknown_",
                 version_code=item.get("immortalwrt_version_code") or "_unknown_",
                 commit=item.get("immortalwrt_commit") or "_unknown_",
-                image=Path(item["image_path"]).name,
+                image=item.get("image_asset") or Path(item["image_path"]).name,
                 image_sha=item["image_sha256"][:12],
                 builder=item["builder_version"],
             )
