@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "3"
+BUILDER_VERSION = "5"
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,10 @@ class BuildResult:
     key: str
     release_tag: str
     release_title: str
+    image_asset: str
+    release_date: str | None
+    immortalwrt_version_code: str | None
+    immortalwrt_commit: str | None
     image_path: str
     image_sha256: str
     ova_path: str
@@ -38,6 +42,13 @@ def sanitize_name(value: str) -> str:
     clean = re.sub(r"(\.img\.gz|\.img)$", "", value)
     clean = re.sub(r"[^A-Za-z0-9._-]+", "-", clean).strip("-._")
     return clean or "openwrt"
+
+
+def sanitize_tag_component(value: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._")
+    if not clean:
+        raise ValueError("release metadata contains an empty tag component")
+    return clean
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -193,23 +204,46 @@ def write_ova(ova: Path, files: list[Path]) -> None:
             tar.add(path, arcname=path.name)
 
 
-def build_image(image: Path, out_dir: Path, nic_count: int) -> BuildResult:
+def build_image(
+    image: Path,
+    out_dir: Path,
+    nic_count: int,
+    *,
+    release_date: str | None = None,
+    immortalwrt_version_code: str | None = None,
+    immortalwrt_commit: str | None = None,
+) -> BuildResult:
     require_tools(["qemu-img"])
     image_sha = sha256_file(image)
     base_name = sanitize_name(image.name)
     short_image = image_sha[:12]
     key = f"{image_sha}:{BUILDER_VERSION}"
-    release_tag = f"openwrt-{base_name}-{short_image}"
-    release_title = f"{base_name} ESXi OVA ({short_image})"
+    if release_date and immortalwrt_commit:
+        release_date = sanitize_tag_component(release_date)
+        immortalwrt_commit = sanitize_tag_component(immortalwrt_commit)
+        release_tag = "openwrt-{base}-{date}-{commit}-{image}".format(
+            base=base_name,
+            date=release_date,
+            commit=immortalwrt_commit,
+            image=short_image,
+        )
+        artifact_name = f"{base_name}-{release_date}-{immortalwrt_commit}-{short_image}"
+        release_title = f"ImmortalWrt x86_64 ESXi OVA - {release_date} {immortalwrt_commit}"
+    else:
+        release_tag = f"openwrt-{base_name}-{short_image}"
+        release_title = f"{base_name} ESXi OVA ({short_image})"
+        artifact_name = f"{base_name}-{short_image}"
+    image_asset = f"{artifact_name}.img.gz"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="openwrt-img-to-ova-") as tmp_s:
         tmp = Path(tmp_s)
         raw = tmp / f"{base_name}.img"
-        vmdk = out_dir / f"{base_name}-esxi-{short_image}.vmdk"
-        ovf = out_dir / f"{base_name}-esxi-{short_image}.ovf"
-        mf = out_dir / f"{base_name}-esxi-{short_image}.mf"
-        ova = out_dir / f"{base_name}-esxi-{short_image}.ova"
+        esxi_artifact_name = f"{base_name}-esxi-{artifact_name.removeprefix(base_name + '-')}"
+        vmdk = out_dir / f"{esxi_artifact_name}.vmdk"
+        ovf = out_dir / f"{esxi_artifact_name}.ovf"
+        mf = out_dir / f"{esxi_artifact_name}.mf"
+        ova = out_dir / f"{esxi_artifact_name}.ova"
         checksum = out_dir / f"{ova.name}.sha256"
 
         decompress_image(image, raw)
@@ -224,6 +258,10 @@ def build_image(image: Path, out_dir: Path, nic_count: int) -> BuildResult:
         key=key,
         release_tag=release_tag,
         release_title=release_title,
+        image_asset=image_asset,
+        release_date=release_date,
+        immortalwrt_version_code=immortalwrt_version_code,
+        immortalwrt_commit=immortalwrt_commit,
         image_path=relative_display_path(image),
         image_sha256=image_sha,
         ova_path=ova.as_posix(),
@@ -239,6 +277,10 @@ def result_to_dict(result: BuildResult) -> dict[str, str]:
         "key": result.key,
         "release_tag": result.release_tag,
         "release_title": result.release_title,
+        "image_asset": result.image_asset,
+        "release_date": result.release_date or "",
+        "immortalwrt_version_code": result.immortalwrt_version_code or "",
+        "immortalwrt_commit": result.immortalwrt_commit or "",
         "image_path": result.image_path,
         "image_sha256": result.image_sha256,
         "ova_path": result.ova_path,
@@ -264,9 +306,23 @@ def discover_images(img_dir: Path) -> list[Path]:
     return sorted({path.resolve() for path in images if path.is_file()})
 
 
+def validate_release_metadata(args: argparse.Namespace) -> tuple[str | None, str | None, str | None]:
+    release_date = args.release_date
+    immortalwrt_version_code = args.immortalwrt_version_code
+    immortalwrt_commit = args.immortalwrt_commit
+    if not any((release_date, immortalwrt_version_code, immortalwrt_commit)):
+        return None, None, None
+    if not release_date or not immortalwrt_commit:
+        raise ValueError("--release-date and --immortalwrt-commit must be provided together")
+    if not re.fullmatch(r"\d{8}", release_date):
+        raise ValueError("--release-date must use YYYYMMDD format")
+    return release_date, immortalwrt_version_code, immortalwrt_commit
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     manifest = read_manifest(args.manifest)
     conversions = manifest.get("conversions", {})
+    release_date, immortalwrt_version_code, immortalwrt_commit = validate_release_metadata(args)
     built: list[dict[str, str]] = []
     skipped = 0
     for image in discover_images(args.img_dir):
@@ -277,7 +333,18 @@ def cmd_scan(args: argparse.Namespace) -> int:
             print(f"skip already converted: {image}")
             continue
         print(f"build pending image: {image}")
-        built.append(result_to_dict(build_image(image, args.out_dir, args.nic_count)))
+        built.append(
+            result_to_dict(
+                build_image(
+                    image,
+                    args.out_dir,
+                    args.nic_count,
+                    release_date=release_date,
+                    immortalwrt_version_code=immortalwrt_version_code,
+                    immortalwrt_commit=immortalwrt_commit,
+                )
+            )
+        )
     write_json(args.results, {"built": built, "skipped": skipped})
     print(f"built {len(built)} image(s), skipped {skipped}")
     return 0
@@ -290,9 +357,13 @@ def cmd_record(args: argparse.Namespace) -> int:
     for item in results.get("built", []):
         conversions[item["key"]] = {
             "image_path": item["image_path"],
+            "image_asset": item.get("image_asset", Path(item["image_path"]).name),
             "image_sha256": item["image_sha256"],
             "builder_version": item["builder_version"],
             "release_tag": item["release_tag"],
+            "release_date": item.get("release_date"),
+            "immortalwrt_version_code": item.get("immortalwrt_version_code"),
+            "immortalwrt_commit": item.get("immortalwrt_commit"),
             "ova_asset": Path(item["ova_path"]).name,
             "checksum_asset": Path(item["checksum_path"]).name,
         }
@@ -307,9 +378,12 @@ def write_converted_doc(path: Path, manifest: dict) -> None:
     conversions = manifest.get("conversions", {})
     for item in sorted(conversions.values(), key=lambda value: value["release_tag"]):
         rows.append(
-            "| `{release_tag}` | `{image}` | `{image_sha}` | `{builder}` |".format(
+            "| `{release_tag}` | `{date}` | `{version_code}` | `{commit}` | `{image}` | `{image_sha}` | `{builder}` |".format(
                 release_tag=item["release_tag"],
-                image=Path(item["image_path"]).name,
+                date=item.get("release_date") or "_unknown_",
+                version_code=item.get("immortalwrt_version_code") or "_unknown_",
+                commit=item.get("immortalwrt_commit") or "_unknown_",
+                image=item.get("image_asset") or Path(item["image_path"]).name,
                 image_sha=item["image_sha256"][:12],
                 builder=item["builder_version"],
             )
@@ -319,9 +393,9 @@ def write_converted_doc(path: Path, manifest: dict) -> None:
         "",
         "This file is generated by the GitHub Actions workflow.",
         "",
-        "| Release | Image | Image SHA | Builder |",
-        "| --- | --- | --- | --- |",
-        *(rows or ["| _None_ | _None_ | _None_ | _None_ |"]),
+        "| Release | Build Date | ImmortalWrt Version | ImmortalWrt Commit | Image | Image SHA | Builder |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        *(rows or ["| _None_ | _None_ | _None_ | _None_ | _None_ | _None_ | _None_ |"]),
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -338,6 +412,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     scan.add_argument("--out-dir", type=Path, default=Path("dist"))
     scan.add_argument("--results", type=Path, default=Path("dist/build-results.json"))
     scan.add_argument("--nic-count", type=int, default=6)
+    scan.add_argument("--release-date", help="build/release date in YYYYMMDD format")
+    scan.add_argument("--immortalwrt-version-code", help="ImmortalWrt version.buildinfo value")
+    scan.add_argument("--immortalwrt-commit", help="ImmortalWrt source commit id")
     scan.set_defaults(func=cmd_scan)
 
     record = subparsers.add_parser("record", help="record successfully published builds")
