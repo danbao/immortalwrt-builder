@@ -3,8 +3,8 @@ name: Build OpenWrt
 on:
   workflow_dispatch:
   schedule:
-    # Sunday 02:00 Asia/Shanghai
-    - cron: "0 18 * * 6"
+    # Daily 02:00 Asia/Shanghai
+    - cron: "0 18 * * *"
 
 permissions:
   contents: write
@@ -36,6 +36,22 @@ jobs:
           wget -q "https://downloads.immortalwrt.org/releases/${IB_VERSION}/targets/x86/64/immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
           tar --zstd -xf "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
           mv "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64" imagebuilder
+
+      - name: Collect release metadata
+        run: |
+          version_code="$(wget -qO- "https://downloads.immortalwrt.org/releases/${IB_VERSION}/targets/x86/64/version.buildinfo" | tr -d '[:space:]')"
+          immortalwrt_commit="${version_code##*-}"
+          if [ -z "${version_code}" ] || [ "${immortalwrt_commit}" = "${version_code}" ]; then
+            echo "Failed to parse ImmortalWrt version.buildinfo: ${version_code}" >&2
+            exit 1
+          fi
+          {
+            echo "BUILD_DATE=$(TZ=Asia/Shanghai date +%Y%m%d)"
+            echo "IMMORTALWRT_VERSION_CODE=${version_code}"
+            echo "IMMORTALWRT_COMMIT=${immortalwrt_commit}"
+          } >> "${GITHUB_ENV}"
+          echo "ImmortalWrt version: ${version_code}"
+          echo "ImmortalWrt commit: ${immortalwrt_commit}"
 
       - name: Disable auxiliary image formats
         run: |
@@ -139,7 +155,10 @@ jobs:
             --manifest manifests/converted-images.json \
             --out-dir dist \
             --results dist/build-results.json \
-            --nic-count 1
+            --nic-count 1 \
+            --release-date "${BUILD_DATE}" \
+            --immortalwrt-version-code "${IMMORTALWRT_VERSION_CODE}" \
+            --immortalwrt-commit "${IMMORTALWRT_COMMIT}"
           count="$(python3 -c 'import json; print(len(json.load(open("dist/build-results.json"))["built"]))')"
           echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
@@ -148,7 +167,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/publish_releases.py dist/build-results.json
+          python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
           tag="$(python3 -c 'import json; print(json.load(open("dist/build-results.json"))["built"][0]["release_tag"])')"
           gh release upload "${tag}" build-out/immortalwrt-x86-64.img.gz
 
