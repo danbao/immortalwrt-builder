@@ -14,6 +14,7 @@ RELEASE_TAG_PATTERNS = (
     re.compile(r"^openwrt-immortalwrt-x86-64-[0-9a-f]{12}$"),
     re.compile(r"^openwrt-immortalwrt-x86-64-\d{8}-[0-9a-f]+-[0-9a-f]{12}$"),
 )
+ASSET_NAME_PATTERN = re.compile(r"^immortalwrt-x86-64.*(\.img\.gz|\.ova|\.ova\.sha256)$")
 
 
 def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -29,16 +30,36 @@ def is_managed_release_tag(tag: str) -> bool:
     return any(pattern.fullmatch(tag) for pattern in RELEASE_TAG_PATTERNS)
 
 
+def is_managed_asset_name(name: str) -> bool:
+    return bool(ASSET_NAME_PATTERN.fullmatch(name))
+
+
+def list_release_assets(tag: str) -> list[dict[str, object]]:
+    result = run(["gh", "release", "view", tag, "--json", "assets"], check=False)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    payload = json.loads(result.stdout or "{}")
+    return payload.get("assets", [])
+
+
+def delete_stale_assets(tag: str, keep_assets: set[str]) -> None:
+    for asset in list_release_assets(tag):
+        name = str(asset.get("name", ""))
+        if name in keep_assets or not is_managed_asset_name(name):
+            continue
+        result = run(["gh", "release", "delete-asset", tag, name, "--yes"], check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        print(f"deleted stale asset: {name}")
+
+
 def publish_item(item: dict[str, str]) -> bool:
     tag = item["release_tag"]
-    if release_exists(tag):
-        print(f"release already exists: {tag}")
-        return False
-
     ova = Path(item["ova_path"])
     checksum = Path(item["checksum_path"])
+    image_asset = item.get("image_asset") or Path(item["image_path"]).name
     note_lines = [
-        f"Image: `{Path(item['image_path']).name}`",
+        f"Image: `{image_asset}`",
         f"Image SHA256: `{item['image_sha256']}`",
         f"Builder version: `{item['builder_version']}`",
     ]
@@ -49,6 +70,17 @@ def publish_item(item: dict[str, str]) -> bool:
     if item.get("immortalwrt_commit"):
         note_lines.insert(2, f"ImmortalWrt commit: `{item['immortalwrt_commit']}`")
     notes = "\n".join(note_lines)
+    if release_exists(tag):
+        result = run(["gh", "release", "edit", tag, "--title", item["release_title"], "--notes", notes], check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        result = run(["gh", "release", "upload", tag, str(ova), str(checksum), "--clobber"], check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        delete_stale_assets(tag, {ova.name, checksum.name, image_asset})
+        print(f"updated existing release: {tag}")
+        return False
+
     command = [
         "gh",
         "release",

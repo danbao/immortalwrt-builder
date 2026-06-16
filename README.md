@@ -20,6 +20,14 @@ openwrt-immortalwrt-x86-64-YYYYMMDD-<immortalwrt_commit>-<image_sha12>
 
 例如 `openwrt-immortalwrt-x86-64-20260616-cf234f8de6d5-03b7fe491448`。
 
+Release title 使用 `ImmortalWrt x86_64 ESXi OVA - YYYYMMDD <immortalwrt_commit>`，例如 `ImmortalWrt x86_64 ESXi OVA - 20260616 cf234f8de6d5`。
+
+新发布的资产文件名也使用同一组元数据，例如：
+
+- `immortalwrt-x86-64-20260616-cf234f8de6d5-03b7fe491448.img.gz`
+- `immortalwrt-x86-64-esxi-20260616-cf234f8de6d5-03b7fe491448.ova`
+- `immortalwrt-x86-64-esxi-20260616-cf234f8de6d5-03b7fe491448.ova.sha256`
+
 默认虚拟硬件由转换脚本生成：
 
 - 2 vCPU
@@ -28,11 +36,11 @@ openwrt-immortalwrt-x86-64-YYYYMMDD-<immortalwrt_commit>-<image_sha12>
 - IDE 磁盘控制器
 - `otherLinux64Guest` / `vmx-17`
 
-PVE 使用原始镜像即可：
+PVE 使用原始镜像即可，示例：
 
 ```bash
-gzip -dk immortalwrt-x86-64.img.gz
-qm importdisk <vmid> immortalwrt-x86-64.img <storage>
+gzip -dk immortalwrt-x86-64-20260616-cf234f8de6d5-03b7fe491448.img.gz
+qm importdisk <vmid> immortalwrt-x86-64-20260616-cf234f8de6d5-03b7fe491448.img <storage>
 ```
 
 ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
@@ -52,7 +60,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 7. 使用 `make image PROFILE="generic"` 构建 squashfs UEFI 镜像。
 8. 将生成的 `*squashfs-combined-efi.img.gz` 复制为 `build-out/immortalwrt-x86-64.img.gz`。
 9. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，并传入构建日期、ImmortalWrt 版本码和 commit。
-10. 调用 `scripts/publish_releases.py` 创建 GitHub Release，并上传 `.img.gz`。
+10. 调用 `scripts/publish_releases.py` 创建 GitHub Release，并按带日期和 commit 的资产名上传 `.img.gz`。
 11. 调用 `record` 更新 `manifests/converted-images.json` 和 `docs/converted-images.md`，再由 workflow 提交记录。
 
 转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。每日 workflow 只代表每天检查和构建，镜像 SHA 未变化时不会发布新 Release。
