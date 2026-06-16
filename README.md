@@ -11,11 +11,11 @@ Automation that assembles ImmortalWrt x86_64 firmware with the official ImageBui
 3. Publish a GitHub Release containing the `.ova`, its `.sha256`, and the raw `.img.gz`.
 4. Commit conversion records (`manifests/converted-images.json`, `docs/converted-images.md`) back to `main`; the same image/builder tuple is never converted twice.
 
-Bundled packages: PassWall 2, MosDNS, OpenClash, vlmcsd (KMS), Nikki, Momo, Tailscale, ZeroTier, plus bypass-router tuning (BBR, raised conntrack limit, larger socket buffers, loose rp_filter, nftables flow offload, irqbalance, UPnP, `luci-app-statistics`) and diagnostics tools. Packages missing from the official repo come from third-party prebuilt feeds (nikki/momo pages.dev, passwall SourceForge) and release ipks (sbwml MosDNS bundle, asvow `luci-app-tailscale`).
+Bundled packages: PassWall 2, MosDNS, OpenClash, vlmcsd (KMS), Nikki, Tailscale, ZeroTier, plus bypass-router tuning (BBR, raised conntrack limit, larger socket buffers, loose rp_filter, irqbalance, UPnP, `luci-app-statistics`) and diagnostics tools. `kmod-nft-offload` is included for runtime testing, but flow offload is not enabled by default because transparent-proxy rules can be sensitive to offload behavior. Packages missing from the official repo come from third-party prebuilt feeds (nikki pages.dev, passwall SourceForge) and release ipks (sbwml MosDNS bundle, asvow `luci-app-tailscale`).
 
-Note: Nikki and Momo are both included in the firmware but their transparent-proxy nftables rules conflict — enable only one at runtime.
+Note: Nikki and Momo are mutually exclusive transparent-proxy stacks here; this image keeps Nikki (Mihomo) and omits Momo (sing-box) to avoid nftables rule conflicts.
 
-Bypass-router defaults baked into the image: forwarding sysctl tuning (see `files/etc/sysctl.d/` in the workflow) and a `uci-defaults` script that disables DHCP/RA on LAN (the main router owns address assignment). After importing, set a LAN IP that does not collide with your main router.
+Bypass-router defaults baked into the image: forwarding sysctl tuning under `files/etc/sysctl.d/` and a `uci-defaults` script that disables DHCP/RA on LAN, sets the hostname/timezone/NTP defaults, and enables packet steering. The root filesystem is sized at 4096 MB. After importing, set a LAN IP that does not collide with your main router.
 
 ## Importing
 
