@@ -37,7 +37,7 @@ There are no tests or linters configured. Scripts are stdlib-only Python 3 (no p
 
 ### Build + release pipeline (`.github/workflows/build-openwrt.yml`)
 
-One job, triggered by `workflow_dispatch` or weekly schedule. Steps in order:
+One job, triggered by `workflow_dispatch` or a daily schedule. Steps in order:
 
 1. **ImageBuilder assembly** — release pinned via `IB_VERSION` env (e.g. `24.10.6`); auxiliary image formats (ISO/qcow2/VDI/VMDK/VHDX) are sed-disabled in the IB `.config` because each needs extra host tools (xorriso, qemu-img) and nothing downstream consumes them. Image built with `make image PROFILE=generic ROOTFS_PARTSIZE=1024 PACKAGES=...` — **a nonexistent package name fails the build loudly**.
 2. **Release metadata** — reads upstream `version.buildinfo` for values like `r33869-cf234f8de6d5`, extracts the ImmortalWrt commit, and combines it with the Asia/Shanghai build date for release tags like `openwrt-immortalwrt-x86-64-20260616-cf234f8de6d5-<image_sha12>`.

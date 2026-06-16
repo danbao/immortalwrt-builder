@@ -39,7 +39,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 ## 自动构建流程
 
-主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每周运行一次。当前 ImageBuilder 版本由 workflow 顶部的 `IB_VERSION` 控制，值为 `24.10.6`。
+主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每天运行一次。当前 ImageBuilder 版本由 workflow 顶部的 `IB_VERSION` 控制，值为 `24.10.6`。
 
 工作流执行顺序：
 
