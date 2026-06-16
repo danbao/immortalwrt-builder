@@ -55,7 +55,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 10. 调用 `scripts/publish_releases.py` 创建 GitHub Release，并上传 `.img.gz`。
 11. 调用 `record` 更新 `manifests/converted-images.json` 和 `docs/converted-images.md`，再由 workflow 提交记录。
 
-转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。
+转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。每日 workflow 只代表每天检查和构建，镜像 SHA 未变化时不会发布新 Release。
 
 ## 内置组件与运行注意事项
 
@@ -132,10 +132,10 @@ python3 scripts/openwrt_img_to_ova.py record \
 发布 GitHub Release 需要已认证的 GitHub CLI：
 
 ```bash
-python3 scripts/publish_releases.py dist/build-results.json
+python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
 ```
 
-脚本只创建不存在的 Release tag；如果 tag 已存在，会跳过该项。
+脚本只创建不存在的 Release tag；如果 tag 已存在，会跳过该项。成功发布新 Release 后，脚本会保留最近 30 个自动发布的 OpenWrt Release，并删除更旧的自动 Release 及其 tag。手工创建且不匹配本项目自动 tag 格式的 Release 不会被清理。
 
 ## 维护指南
 
@@ -163,6 +163,8 @@ python3 scripts/publish_releases.py dist/build-results.json
 `skip already converted`：当前镜像 SHA256 和 `BUILDER_VERSION` 已存在于 `manifests/converted-images.json`。如果转换逻辑或 Release tag 规则确实变了，先递增 `BUILDER_VERSION`。
 
 GitHub Release 已存在：`publish_releases.py` 会跳过已有 tag，适合重复运行。
+
+Release 太多：发布脚本默认保留最近 30 个自动 Release；如需调整，修改 workflow 中的 `--keep-releases` 参数。
 
 ## 安全与配置
 
