@@ -90,7 +90,7 @@ jobs:
       - name: Build image
         run: |
           cd imagebuilder
-          make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="4096" PACKAGES="\
+          make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="\
             luci luci-i18n-base-zh-cn luci-theme-argon \
             luci-app-passwall2 luci-app-mosdns luci-app-openclash \
             luci-app-nikki luci-i18n-nikki-zh-cn mihomo-meta luci-app-vlmcsd \
