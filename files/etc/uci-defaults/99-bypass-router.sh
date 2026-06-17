@@ -1,10 +1,27 @@
 #!/bin/sh
 
+#!/bin/sh
+
 # Bypass router: the main router owns address assignment.
 uci -q set dhcp.lan.ignore='1'
 uci -q set dhcp.lan.ra='disabled'
 uci -q set dhcp.lan.dhcpv6='disabled'
 uci -q commit dhcp
+
+# Software flow offload (not hardware — virtual NICs do not support HW offload).
+# This is the single biggest throughput lever on a bypass router; kmod-nft-offload
+# is preinstalled so we enable firewall.flow_offloading by default.
+uci -q set firewall.@defaults[0].flow_offloading='1'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+uci -q commit firewall
+
+# Ensure irqbalance auto-starts (package is preinstalled) to spread softirq/NIC
+# interrupts across CPU cores.
+if ! uci -q get irqbalance.irqbalance >/dev/null; then
+	uci -q set irqbalance.irqbalance='irqbalance'
+fi
+uci -q set irqbalance.irqbalance.enabled='1'
+uci -q commit irqbalance
 
 uci -q set system.@system[0].hostname='immortalwrt-bypass'
 uci -q set system.@system[0].zonename='Asia/Shanghai'

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "5"
+BUILDER_VERSION = "6"
 
 
 @dataclass(frozen=True)
@@ -95,6 +95,9 @@ def decompress_image(source: Path, target: Path) -> None:
         if result.returncode not in (0, 2):
             stderr = result.stderr.decode("utf-8", "replace").strip()
             raise RuntimeError(f"failed to decompress {source}: {stderr}")
+        if result.returncode == 2:
+            stderr = result.stderr.decode("utf-8", "replace").strip()
+            print(f"warning: gzip reported trailing garbage for {source}: {stderr}")
     else:
         shutil.copy2(source, target)
     if not target.exists() or target.stat().st_size == 0:
@@ -102,6 +105,9 @@ def decompress_image(source: Path, target: Path) -> None:
 
 
 def make_ovf(name: str, vmdk_name: str, vmdk_size: int, disk_capacity: int, nic_count: int) -> str:
+    # InstanceID allocation: 0 system, 1 vCPU, 2 memory, 3 disk controller, 4 disk,
+    # 5-7 reserved for future controllers, 8+ NICs. Keep NICs starting at 8 so any
+    # additional controllers added below stay collision-free.
     network_section = "\n".join(
         f'    <Network ovf:name="LAN{i}"><Description>LAN adapter {i}</Description></Network>'
         for i in range(1, nic_count + 1)
@@ -173,11 +179,11 @@ def make_ovf(name: str, vmdk_name: str, vmdk_size: int, disk_capacity: int, nic_
         <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
       </Item>
       <Item>
-        <rasd:Description>IDE Controller</rasd:Description>
-        <rasd:ElementName>IDE 0</rasd:ElementName>
+        <rasd:Description>SCSI Controller</rasd:Description>
+        <rasd:ElementName>SCSI Controller 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
-        <rasd:ResourceSubType>ide</rasd:ResourceSubType>
-        <rasd:ResourceType>5</rasd:ResourceType>
+        <rasd:ResourceSubType>lsisas1068</rasd:ResourceSubType>
+        <rasd:ResourceType>6</rasd:ResourceType>
       </Item>
       <Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
@@ -247,7 +253,7 @@ def build_image(
         checksum = out_dir / f"{ova.name}.sha256"
 
         decompress_image(image, raw)
-        run(["qemu-img", "convert", "-f", "raw", "-O", "vmdk", "-o", "subformat=streamOptimized,adapter_type=ide", str(raw), str(vmdk)])
+        run(["qemu-img", "convert", "-f", "raw", "-O", "vmdk", "-o", "subformat=streamOptimized,adapter_type=lsisas1068", str(raw), str(vmdk)])
         disk_capacity = raw.stat().st_size
         ovf.write_text(make_ovf(base_name, vmdk.name, vmdk.stat().st_size, disk_capacity, nic_count), encoding="utf-8")
         mf.write_text(sha256_text_for(ovf) + sha256_text_for(vmdk), encoding="utf-8")

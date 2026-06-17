@@ -31,7 +31,15 @@ jobs:
           sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext \
             libssl-dev xsltproc rsync wget unzip python3 zstd qemu-utils
 
+      - name: Cache ImageBuilder
+        id: cache-ib
+        uses: actions/cache@v4
+        with:
+          path: imagebuilder
+          key: imagebuilder-${{ env.IB_VERSION }}-${{ runner.os }}-v1
+
       - name: Download ImageBuilder
+        if: steps.cache-ib.outputs.cache-hit != 'true'
         run: |
           wget -q "https://downloads.immortalwrt.org/releases/${IB_VERSION}/targets/x86/64/immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
           tar --zstd -xf "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
@@ -68,23 +76,53 @@ jobs:
       - name: Configure third-party package feeds
         run: |
           cd imagebuilder
-          cat >> repositories.conf <<'EOF'
-          src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki
-          src/gz passwall2 https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall2
-          src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall_packages
-          EOF
+          # Idempotent: only append feeds that are not already present (cache hit restores repositories.conf with prior feed lines).
+          {
+            grep -q '^src/gz nikki ' repositories.conf || echo 'src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki'
+            grep -q '^src/gz passwall2 ' repositories.conf || echo 'src/gz passwall2 https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall2'
+            grep -q '^src/gz passwall_packages ' repositories.conf || echo 'src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall_packages'
+          } >> repositories.conf
           sed -i '/option check_signature/d' repositories.conf
+          echo "Configured repositories:"
+          grep -E '^src/gz ' repositories.conf
+
+      - name: Verify third-party feeds are reachable
+        run: |
+          cd imagebuilder
+          fail=0
+          while read -r _ name url; do
+            case "$name" in
+              nikki|passwall2|passwall_packages)
+                echo "Probing feed $name: $url"
+                wget -q --spider --tries=3 --timeout=20 "$url/Packages.gz" || { echo "::error::feed unreachable: $name ($url)"; fail=1; }
+                ;;
+            esac
+          done < <(grep -E '^src/gz (nikki|passwall2|passwall_packages) ' repositories.conf)
+          if [ "$fail" = "1" ]; then
+            echo "One or more third-party feeds are unreachable from this runner." >&2
+            exit 1
+          fi
+
+      - name: Cache local ipk packages
+        id: cache-ipk
+        uses: actions/cache@v4
+        with:
+          path: imagebuilder/packages
+          key: local-ipk-${{ runner.os }}-${{ hashFiles('.github/workflows/build-openwrt.yml') }}-v1
 
       - name: Add local packages
+        if: steps.cache-ipk.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd imagebuilder
-          gh release download --repo asvow/luci-app-tailscale --pattern '*_all.ipk' --dir packages
-          gh release download --repo sbwml/luci-app-mosdns --pattern 'x86_64-openwrt-24.10.tar.gz' --dir /tmp/mosdns
+          mkdir -p packages
+          gh release download --repo asvow/luci-app-tailscale --pattern '*_all.ipk' --dir packages --clobber
+          gh release download --repo sbwml/luci-app-mosdns --pattern 'x86_64-openwrt-24.10.tar.gz' --dir /tmp/mosdns --clobber
           mkdir -p /tmp/mosdns/extract
           tar -xzf /tmp/mosdns/x86_64-openwrt-24.10.tar.gz -C /tmp/mosdns/extract
-          find /tmp/mosdns/extract -name '*.ipk' -exec mv {} packages/ \;
+          # Move each extracted ipk verbosely so multi-ipk bundles are easy to debug.
+          find /tmp/mosdns/extract -type f -name '*.ipk' -print -exec mv -f {} packages/ \;
           ls -lh packages/
 
       - name: Build image
