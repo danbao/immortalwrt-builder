@@ -1,7 +1,5 @@
 #!/bin/sh
 
-#!/bin/sh
-
 # Bypass router: the main router owns address assignment.
 uci -q set dhcp.lan.ignore='1'
 uci -q set dhcp.lan.ra='disabled'

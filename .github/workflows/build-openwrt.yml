@@ -94,7 +94,12 @@ jobs:
             case "$name" in
               nikki|passwall2|passwall_packages)
                 echo "Probing feed $name: $url"
-                wget -q --spider --tries=3 --timeout=20 "$url/Packages.gz" || { echo "::error::feed unreachable: $name ($url)"; fail=1; }
+                if wget -q --spider --tries=3 --timeout=20 "$url/Packages.gz"; then
+                  echo "  ✓ $name reachable"
+                else
+                  echo "::error::feed unreachable: $name ($url)"
+                  fail=1
+                fi
                 ;;
             esac
           done < <(grep -E '^src/gz (nikki|passwall2|passwall_packages) ' repositories.conf)
