@@ -6,10 +6,9 @@ uci -q set dhcp.lan.ra='disabled'
 uci -q set dhcp.lan.dhcpv6='disabled'
 uci -q commit dhcp
 
-# Software flow offload (not hardware — virtual NICs do not support HW offload).
-# This is the single biggest throughput lever on a bypass router; kmod-nft-offload
-# is preinstalled so we enable firewall.flow_offloading by default.
-uci -q set firewall.@defaults[0].flow_offloading='1'
+# Flow offload stays disabled by default because transparent proxy rules depend
+# on nftables prerouting/forward hooks. Keep HW offload disabled for virtual NICs.
+uci -q set firewall.@defaults[0].flow_offloading='0'
 uci -q set firewall.@defaults[0].flow_offloading_hw='0'
 uci -q commit firewall
 

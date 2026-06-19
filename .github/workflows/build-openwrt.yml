@@ -31,15 +31,7 @@ jobs:
           sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext \
             libssl-dev xsltproc rsync wget unzip python3 zstd qemu-utils
 
-      - name: Cache ImageBuilder
-        id: cache-ib
-        uses: actions/cache@v4
-        with:
-          path: imagebuilder
-          key: imagebuilder-${{ env.IB_VERSION }}-${{ runner.os }}-v1
-
       - name: Download ImageBuilder
-        if: steps.cache-ib.outputs.cache-hit != 'true'
         run: |
           wget -q "https://downloads.immortalwrt.org/releases/${IB_VERSION}/targets/x86/64/immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
           tar --zstd -xf "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
@@ -76,7 +68,7 @@ jobs:
       - name: Configure third-party package feeds
         run: |
           cd imagebuilder
-          # Idempotent: only append feeds that are not already present (cache hit restores repositories.conf with prior feed lines).
+          # Idempotent: only append feeds that are not already present.
           {
             grep -q '^src/gz nikki ' repositories.conf || echo 'src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki'
             grep -q '^src/gz passwall2 ' repositories.conf || echo 'src/gz passwall2 https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall2'
@@ -108,15 +100,7 @@ jobs:
             exit 1
           fi
 
-      - name: Cache local ipk packages
-        id: cache-ipk
-        uses: actions/cache@v4
-        with:
-          path: imagebuilder/packages
-          key: local-ipk-${{ runner.os }}-${{ hashFiles('.github/workflows/build-openwrt.yml') }}-v1
-
       - name: Add local packages
-        if: steps.cache-ipk.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
