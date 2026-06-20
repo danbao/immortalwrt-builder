@@ -71,7 +71,6 @@ jobs:
           # Idempotent: only append feeds that are not already present.
           {
             grep -q '^src/gz nikki ' repositories.conf || echo 'src/gz nikki https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki'
-            grep -q '^src/gz passwall2 ' repositories.conf || echo 'src/gz passwall2 https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall2'
             grep -q '^src/gz passwall_packages ' repositories.conf || echo 'src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall_packages'
           } >> repositories.conf
           sed -i '/option check_signature/d' repositories.conf
@@ -84,7 +83,7 @@ jobs:
           fail=0
           while read -r _ name url; do
             case "$name" in
-              nikki|passwall2|passwall_packages)
+              nikki|passwall_packages)
                 echo "Probing feed $name: $url"
                 if wget -q --spider --tries=3 --timeout=20 "$url/Packages.gz"; then
                   echo "  ✓ $name reachable"
@@ -94,7 +93,7 @@ jobs:
                 fi
                 ;;
             esac
-          done < <(grep -E '^src/gz (nikki|passwall2|passwall_packages) ' repositories.conf)
+          done < <(grep -E '^src/gz (nikki|passwall_packages) ' repositories.conf)
           if [ "$fail" = "1" ]; then
             echo "One or more third-party feeds are unreachable from this runner." >&2
             exit 1
@@ -106,6 +105,7 @@ jobs:
         run: |
           cd imagebuilder
           mkdir -p packages
+          gh release download --repo Openwrt-Passwall/openwrt-passwall2 --pattern 'luci-app-passwall2_*_all.ipk' --dir packages --clobber
           gh release download --repo asvow/luci-app-tailscale --pattern '*_all.ipk' --dir packages --clobber
           gh release download --repo sbwml/luci-app-mosdns --pattern 'x86_64-openwrt-24.10.tar.gz' --dir /tmp/mosdns --clobber
           mkdir -p /tmp/mosdns/extract
