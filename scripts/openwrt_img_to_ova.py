@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "6"
+BUILDER_VERSION = "7"
 
 
 @dataclass(frozen=True)
@@ -179,11 +179,11 @@ def make_ovf(name: str, vmdk_name: str, vmdk_size: int, disk_capacity: int, nic_
         <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
       </Item>
       <Item>
-        <rasd:Description>SCSI Controller</rasd:Description>
-        <rasd:ElementName>SCSI Controller 0</rasd:ElementName>
+        <rasd:Description>IDE Controller</rasd:Description>
+        <rasd:ElementName>IDE 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
-        <rasd:ResourceSubType>lsisas1068</rasd:ResourceSubType>
-        <rasd:ResourceType>6</rasd:ResourceType>
+        <rasd:ResourceSubType>ide</rasd:ResourceSubType>
+        <rasd:ResourceType>5</rasd:ResourceType>
       </Item>
       <Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
@@ -253,7 +253,7 @@ def build_image(
         checksum = out_dir / f"{ova.name}.sha256"
 
         decompress_image(image, raw)
-        run(["qemu-img", "convert", "-f", "raw", "-O", "vmdk", "-o", "subformat=streamOptimized,adapter_type=lsisas1068", str(raw), str(vmdk)])
+        run(["qemu-img", "convert", "-f", "raw", "-O", "vmdk", "-o", "subformat=streamOptimized,adapter_type=ide", str(raw), str(vmdk)])
         disk_capacity = raw.stat().st_size
         ovf.write_text(make_ovf(base_name, vmdk.name, vmdk.stat().st_size, disk_capacity, nic_count), encoding="utf-8")
         mf.write_text(sha256_text_for(ovf) + sha256_text_for(vmdk), encoding="utf-8")

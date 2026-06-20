@@ -33,7 +33,7 @@ Release title 使用 `ImmortalWrt x86_64 ESXi OVA - YYYYMMDD <immortalwrt_commit
 - 2 vCPU
 - 2048 MB 内存
 - 1 个 VmxNet3 网卡
-- LSI Logic SAS 磁盘控制器
+- IDE 磁盘控制器
 - `otherLinux64Guest` / `vmx-17`
 
 PVE 使用原始镜像即可，示例：
@@ -52,11 +52,11 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 工作流执行顺序：
 
 1. 安装 Ubuntu runner 依赖，包括 ImageBuilder 所需工具和 `qemu-utils`。
-2. 尝试从 `actions/cache` 恢复 ImageBuilder 目录；缓存未命中时下载并解压 `immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst`。`IB_VERSION` 不变时后续运行直接复用，省去下载与解压。
+2. 下载并解压 `immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst`。
 3. 读取官方 `version.buildinfo`，采集 `r33869-cf234f8de6d5` 这类版本码，并提取 ImmortalWrt commit。
 4. 关闭 ISO、qcow2、VDI、VMDK、VHDX 等辅助镜像格式，只保留后续需要的 raw image。
 5. 幂等地追加第三方软件源（缓存命中也不会重复追加），关闭 `repositories.conf` 中的签名检查项，并对各第三方源做一次 `wget --spider` 探活，源不可达时立即失败便于排查。
-6. 尝试从 `actions/cache` 恢复本地 `.ipk` 包；缓存未命中时下载 `luci-app-tailscale` 和 MosDNS 离线包。
+6. 下载本地 `.ipk` 包，包括 `luci-app-tailscale` 和 MosDNS 离线包。
 7. 使用 `make image PROFILE="generic" ROOTFS_PARTSIZE="2048"` 构建 squashfs UEFI 镜像。
 8. 将生成的 `*squashfs-combined-efi.img.gz` 复制为 `build-out/immortalwrt-x86-64.img.gz`。
 9. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，并传入构建日期、ImmortalWrt 版本码和 commit。
@@ -77,7 +77,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 - Tailscale
 - ZeroTier
 - vlmcsd
-- UPnP、irqbalance，以及 nftables flow offload 内核模块（默认开启软件 offload）
+- UPnP、irqbalance，以及可供运行时测试的 nftables flow offload 内核模块
 - `luci-app-statistics` 和常用 collectd 模块
 - `curl`、`htop`、`tcpdump`、`mtr`、`iperf3`、`bind-dig` 等诊断工具
 
@@ -93,7 +93,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 - 默认关闭 LAN DHCP、RA 和 DHCPv6，由主路由负责地址分配。
 - 默认主机名为 `immortalwrt-bypass`，时区为 `Asia/Shanghai`，NTP 使用中国大陆和通用池混合服务器。
 - 默认选择 Argon 作为 LuCI 主题。
-- 启用 packet steering；默认开启 nftables **软件** flow offload（`firewall.@defaults[0].flow_offloading='1'`，不开硬件 offload，虚拟网卡不支持），显著提升旁路由转发吞吐。
+- 启用 packet steering；`kmod-nft-offload` 仅预装供运行时测试，不默认开启 flow offload，避免透明代理规则被快路径绕过。
 - 默认启用 irqbalance 自启，把软中断和网卡中断分散到多个 CPU 核心。
 - 根分区大小为 2048 MB。
 
