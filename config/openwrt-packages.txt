@@ -1,0 +1,54 @@
+# Core LuCI UI
+luci
+luci-i18n-base-zh-cn
+luci-theme-argon
+
+# Proxy, DNS, and network applications
+luci-app-passwall2
+luci-app-mosdns
+luci-app-openclash
+luci-app-nikki
+luci-i18n-nikki-zh-cn
+mihomo-meta
+luci-app-vlmcsd
+luci-app-tailscale
+tailscale
+luci-app-zerotier
+zerotier
+
+# Virtualization and network drivers
+kmod-vmxnet3
+open-vm-tools
+kmod-igb
+kmod-e1000e
+
+# Bypass-router tuning support
+kmod-tcp-bbr
+kmod-tun
+irqbalance
+luci-app-upnp
+kmod-nft-offload
+
+# Statistics
+luci-app-statistics
+collectd-mod-cpu
+collectd-mod-interface
+collectd-mod-load
+collectd-mod-memory
+collectd-mod-ping
+collectd-mod-uptime
+collectd-mod-iptables
+
+# Diagnostics and filesystems
+ip-full
+ca-bundle
+curl
+htop
+ethtool
+kmod-fs-ext4
+kmod-fs-exfat
+openssh-sftp-server
+tcpdump
+mtr
+iperf3
+bind-dig
