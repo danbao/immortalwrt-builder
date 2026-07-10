@@ -42,6 +42,32 @@ def list_release_assets(tag: str) -> list[dict[str, object]]:
     return payload.get("assets", [])
 
 
+def release_asset_names(tag: str) -> set[str]:
+    return {str(asset.get("name", "")) for asset in list_release_assets(tag)}
+
+
+def require_file(path: Path) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"required release asset is missing: {path}")
+    if path.stat().st_size == 0:
+        raise RuntimeError(f"required release asset is empty: {path}")
+
+
+def expected_asset_paths(item: dict[str, str]) -> tuple[Path, Path, Path]:
+    ova = Path(item["ova_path"])
+    checksum = Path(item["checksum_path"])
+    image_asset = item.get("image_asset") or Path(item["image_path"]).name
+    image = Path(item.get("image_asset_path") or ova.with_name(image_asset))
+    return ova, checksum, image
+
+
+def verify_release_assets(tag: str, expected_names: set[str]) -> None:
+    names = release_asset_names(tag)
+    missing = expected_names - names
+    if missing:
+        raise RuntimeError(f"release {tag} is missing asset(s): {', '.join(sorted(missing))}")
+
+
 def delete_stale_assets(tag: str, keep_assets: set[str]) -> None:
     for asset in list_release_assets(tag):
         name = str(asset.get("name", ""))
@@ -55,9 +81,13 @@ def delete_stale_assets(tag: str, keep_assets: set[str]) -> None:
 
 def publish_item(item: dict[str, str]) -> bool:
     tag = item["release_tag"]
-    ova = Path(item["ova_path"])
-    checksum = Path(item["checksum_path"])
+    ova, checksum, image = expected_asset_paths(item)
     image_asset = item.get("image_asset") or Path(item["image_path"]).name
+    for path in (ova, checksum, image):
+        require_file(path)
+    expected_names = {ova.name, checksum.name, image.name}
+    if image.name != image_asset:
+        raise ValueError(f"raw image asset name mismatch: expected {image_asset}, got {image.name}")
     note_lines = [
         f"Image: `{image_asset}`",
         f"Image SHA256: `{item['image_sha256']}`",
@@ -74,10 +104,11 @@ def publish_item(item: dict[str, str]) -> bool:
         result = run(["gh", "release", "edit", tag, "--title", item["release_title"], "--notes", notes], check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip())
-        result = run(["gh", "release", "upload", tag, str(ova), str(checksum), "--clobber"], check=False)
+        result = run(["gh", "release", "upload", tag, str(ova), str(checksum), str(image), "--clobber"], check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip())
-        delete_stale_assets(tag, {ova.name, checksum.name, image_asset})
+        delete_stale_assets(tag, expected_names)
+        verify_release_assets(tag, expected_names)
         print(f"updated existing release: {tag}")
         return False
 
@@ -88,6 +119,7 @@ def publish_item(item: dict[str, str]) -> bool:
         tag,
         str(ova),
         str(checksum),
+        str(image),
         "--title",
         item["release_title"],
         "--notes",
@@ -96,6 +128,7 @@ def publish_item(item: dict[str, str]) -> bool:
     result = run(command, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())
+    verify_release_assets(tag, expected_names)
     print(f"published release: {tag}")
     return True
 
