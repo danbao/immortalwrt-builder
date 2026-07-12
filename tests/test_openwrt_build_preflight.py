@@ -12,6 +12,18 @@ import openwrt_build_preflight as preflight
 
 
 class OpenWrtBuildPreflightTests(unittest.TestCase):
+    def test_daed_package_list_excludes_conflicting_proxy_stacks(self) -> None:
+        package_file = Path(__file__).resolve().parents[1] / "config" / "openwrt-packages-daed.txt"
+        packages = set(preflight.read_packages(package_file))
+        self.assertIn("luci-app-daede", packages)
+        self.assertIn("daed", packages)
+        self.assertIn("luci-app-mosdns", packages)
+        self.assertNotIn("luci-app-passwall2", packages)
+        self.assertNotIn("luci-app-openclash", packages)
+        self.assertNotIn("luci-app-nikki", packages)
+        self.assertNotIn("luci-i18n-nikki-zh-cn", packages)
+        self.assertNotIn("mihomo-meta", packages)
+
     def test_read_packages_ignores_comments_and_rejects_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
             package_file = Path(tmp_s) / "packages.txt"
@@ -81,6 +93,39 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             args.release_tag = ["missing"]
             with self.assertRaisesRegex(RuntimeError, "missing from manifest"):
                 preflight.cmd_verify_records(args)
+
+    def test_copy_raw_images_handles_multiple_built_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            build_out = tmp / "build-out"
+            dist = tmp / "dist"
+            build_out.mkdir()
+            standard = build_out / "immortalwrt-x86-64.img.gz"
+            daed = build_out / "immortalwrt-x86-64-daed.img.gz"
+            standard.write_bytes(b"standard")
+            daed.write_bytes(b"daed")
+            results = tmp / "build-results.json"
+            results.write_text(
+                json.dumps(
+                    {
+                        "built": [
+                            {
+                                "image_path": str(standard),
+                                "image_asset": "immortalwrt-x86-64-20260713.img.gz",
+                            },
+                            {
+                                "image_path": str(daed),
+                                "image_asset": "immortalwrt-x86-64-daed-20260713.img.gz",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(results=results, source_dir=build_out, out_dir=dist)
+            self.assertEqual(preflight.cmd_copy_raw_images(args), 0)
+            self.assertEqual((dist / "immortalwrt-x86-64-20260713.img.gz").read_bytes(), b"standard")
+            self.assertEqual((dist / "immortalwrt-x86-64-daed-20260713.img.gz").read_bytes(), b"daed")
 
 
 if __name__ == "__main__":

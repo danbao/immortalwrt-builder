@@ -130,37 +130,47 @@ jobs:
             --dir /tmp/mosdns \
             --retries 8 \
             --timeout 120
+          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
+            --repo kenzok8/openwrt-daede \
+            --pattern 'luci-app-daede_*_all.ipk' \
+            --dir packages \
+            --retries 8 \
+            --timeout 60
           mkdir -p /tmp/mosdns/extract
           tar -xzf /tmp/mosdns/x86_64-openwrt-24.10.tar.gz -C /tmp/mosdns/extract
           # Move each extracted ipk verbosely so multi-ipk bundles are easy to debug.
           find /tmp/mosdns/extract -type f -name '*.ipk' -print -exec mv -f {} packages/ \;
           ls -lh packages/
 
-      - name: Preflight package manifest
+      - name: Build images
         run: |
           cd imagebuilder
-          packages="$(python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" package-string --package-file "${GITHUB_WORKSPACE}/config/openwrt-packages.txt")"
-          make manifest PROFILE="generic" PACKAGES="${packages}"
+          build_flavor() {
+            flavor="$1"
+            package_file="$2"
+            output_name="$3"
 
-      - name: Build image
-        run: |
-          cd imagebuilder
-          packages="$(python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" package-string --package-file "${GITHUB_WORKSPACE}/config/openwrt-packages.txt")"
-          make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="${packages}"
+            echo "Building ${flavor} image from ${package_file}"
+            packages="$(python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" package-string --package-file "${package_file}")"
+            make manifest PROFILE="generic" PACKAGES="${packages}"
+            rm -rf bin/targets/x86/64
+            make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="${packages}"
 
-      - name: Collect image
-        run: |
-          shopt -s nullglob
-          images=(imagebuilder/bin/targets/x86/64/*squashfs-combined-efi.img.gz)
-          if [ "${#images[@]}" -ne 1 ]; then
-            echo "Expected exactly one squashfs EFI image, found ${#images[@]}" >&2
-            printf '%s\n' "${images[@]}" >&2
-            exit 1
-          fi
-          image="${images[0]}"
-          mkdir -p build-out
-          cp "${image}" build-out/immortalwrt-x86-64.img.gz
-          ls -lh build-out/
+            shopt -s nullglob
+            images=(bin/targets/x86/64/*squashfs-combined-efi.img.gz)
+            if [ "${#images[@]}" -ne 1 ]; then
+              echo "Expected exactly one ${flavor} squashfs EFI image, found ${#images[@]}" >&2
+              printf '%s\n' "${images[@]}" >&2
+              exit 1
+            fi
+            mkdir -p "${GITHUB_WORKSPACE}/build-out"
+            cp "${images[0]}" "${GITHUB_WORKSPACE}/build-out/${output_name}"
+            ls -lh "${GITHUB_WORKSPACE}/build-out/${output_name}"
+          }
+
+          build_flavor "standard" "${GITHUB_WORKSPACE}/config/openwrt-packages.txt" "immortalwrt-x86-64.img.gz"
+          build_flavor "daed" "${GITHUB_WORKSPACE}/config/openwrt-packages-daed.txt" "immortalwrt-x86-64-daed.img.gz"
+          ls -lh "${GITHUB_WORKSPACE}/build-out/"
 
       - name: Convert to OVA
         id: convert
@@ -182,22 +192,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          image_asset="$(python3 -c 'import json; print(json.load(open("dist/build-results.json"))["built"][0]["image_asset"])')"
-          cp build-out/immortalwrt-x86-64.img.gz "dist/${image_asset}"
+          python3 scripts/openwrt_build_preflight.py copy-raw-images \
+            --results dist/build-results.json \
+            --source-dir build-out \
+            --out-dir dist
           python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
 
       - name: Record converted images
         if: steps.convert.outputs.count != '0' && env.PUBLISH_RELEASE == 'true'
         run: |
-          tag="$(python3 -c 'import json; print(json.load(open("dist/build-results.json"))["built"][0]["release_tag"])')"
+          mapfile -t release_tags < <(python3 -c 'import json; print("\n".join(item["release_tag"] for item in json.load(open("dist/build-results.json"))["built"]))')
           python3 scripts/openwrt_img_to_ova.py record \
             --results dist/build-results.json \
             --manifest manifests/converted-images.json \
             --doc docs/converted-images.md
+          verify_args=()
+          for tag in "${release_tags[@]}"; do
+            verify_args+=(--release-tag "${tag}")
+          done
           python3 scripts/openwrt_build_preflight.py verify-records \
             --manifest manifests/converted-images.json \
             --doc docs/converted-images.md \
-            --release-tag "${tag}" \
+            "${verify_args[@]}" \
             --check-latest-release
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
