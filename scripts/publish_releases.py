@@ -10,9 +10,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-RELEASE_TAG_PATTERNS = (
-    re.compile(r"^openwrt-immortalwrt-x86-64-[0-9a-f]{12}$"),
-    re.compile(r"^openwrt-immortalwrt-x86-64-\d{8}-[0-9a-f]+-[0-9a-f]{12}$"),
+RELEASE_TAG_FAMILY_PATTERNS = (
+    ("daed", re.compile(r"^openwrt-immortalwrt-x86-64-daed-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
+    ("standard", re.compile(r"^openwrt-immortalwrt-x86-64-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
 )
 ASSET_NAME_PATTERN = re.compile(r"^immortalwrt-x86-64.*(\.img\.gz|\.ova|\.ova\.sha256)$")
 
@@ -27,7 +27,14 @@ def release_exists(tag: str) -> bool:
 
 
 def is_managed_release_tag(tag: str) -> bool:
-    return any(pattern.fullmatch(tag) for pattern in RELEASE_TAG_PATTERNS)
+    return managed_release_family(tag) is not None
+
+
+def managed_release_family(tag: str) -> str | None:
+    for family, pattern in RELEASE_TAG_FAMILY_PATTERNS:
+        if pattern.fullmatch(tag):
+            return family
+    return None
 
 
 def is_managed_asset_name(name: str) -> bool:
@@ -152,19 +159,23 @@ def list_releases(limit: int = 1000) -> list[dict[str, object]]:
 
 
 def prune_old_releases(keep_releases: int) -> None:
-    managed_releases = [
-        release
-        for release in list_releases()
-        if is_managed_release_tag(str(release.get("tagName", "")))
-    ]
-    managed_releases.sort(key=lambda release: str(release.get("createdAt", "")), reverse=True)
-    stale_releases = managed_releases[keep_releases:]
-    for release in stale_releases:
-        tag = str(release["tagName"])
-        result = run(["gh", "release", "delete", tag, "--yes", "--cleanup-tag"], check=False)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip())
-        print(f"deleted old release: {tag}")
+    releases_by_family: dict[str, list[dict[str, object]]] = {}
+    for release in list_releases():
+        tag = str(release.get("tagName", ""))
+        family = managed_release_family(tag)
+        if family is None:
+            continue
+        releases_by_family.setdefault(family, []).append(release)
+
+    for family, releases in sorted(releases_by_family.items()):
+        releases.sort(key=lambda release: str(release.get("createdAt", "")), reverse=True)
+        stale_releases = releases[keep_releases:]
+        for release in stale_releases:
+            tag = str(release["tagName"])
+            result = run(["gh", "release", "delete", tag, "--yes", "--cleanup-tag"], check=False)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip())
+            print(f"deleted old {family} release: {tag}")
 
 
 def cleanup_old_releases(keep_releases: int) -> None:

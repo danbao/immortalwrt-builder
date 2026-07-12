@@ -8,6 +8,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -273,6 +274,36 @@ def cmd_verify_records(args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_built_image(path_value: str, source_dir: Path) -> Path:
+    image = Path(path_value)
+    candidates = [image]
+    if not image.is_absolute():
+        candidates.append(source_dir / image.name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"built image not found: {path_value}")
+
+
+def cmd_copy_raw_images(args: argparse.Namespace) -> int:
+    payload = json.loads(args.results.read_text(encoding="utf-8"))
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for item in payload.get("built", []):
+        image_asset = item.get("image_asset")
+        if not image_asset:
+            raise ValueError(f"built item has no image_asset: {item}")
+        source = resolve_built_image(str(item["image_path"]), args.source_dir)
+        target = args.out_dir / str(image_asset)
+        shutil.copy2(source, target)
+        if target.stat().st_size == 0:
+            raise RuntimeError(f"copied empty raw image asset: {target}")
+        copied += 1
+        print(f"copied raw image asset: {source} -> {target}")
+    print(f"copied {copied} raw image asset(s)")
+    return 0
+
+
 def add_common_network_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--retries", type=int, default=5)
@@ -326,6 +357,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_records.add_argument("--repo")
     add_common_network_args(verify_records)
     verify_records.set_defaults(func=cmd_verify_records)
+
+    copy_raw_images = subparsers.add_parser("copy-raw-images", help="copy built raw images to their release asset names")
+    copy_raw_images.add_argument("--results", type=Path, required=True)
+    copy_raw_images.add_argument("--source-dir", type=Path, required=True)
+    copy_raw_images.add_argument("--out-dir", type=Path, required=True)
+    copy_raw_images.set_defaults(func=cmd_copy_raw_images)
 
     return parser.parse_args(argv)
 

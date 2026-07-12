@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "7"
+BUILDER_VERSION = "8"
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,40 @@ def sanitize_tag_component(value: str) -> str:
     if not clean:
         raise ValueError("release metadata contains an empty tag component")
     return clean
+
+
+def release_display_name(base_name: str) -> str:
+    if base_name == "immortalwrt-x86-64-daed":
+        return "ImmortalWrt x86_64 daed"
+    if base_name == "immortalwrt-x86-64":
+        return "ImmortalWrt x86_64"
+    return base_name
+
+
+def release_metadata(
+    base_name: str,
+    short_image: str,
+    *,
+    release_date: str | None = None,
+    immortalwrt_commit: str | None = None,
+) -> tuple[str, str, str]:
+    display_name = release_display_name(base_name)
+    if release_date and immortalwrt_commit:
+        release_date = sanitize_tag_component(release_date)
+        immortalwrt_commit = sanitize_tag_component(immortalwrt_commit)
+        release_tag = "openwrt-{base}-{date}-{commit}-{image}".format(
+            base=base_name,
+            date=release_date,
+            commit=immortalwrt_commit,
+            image=short_image,
+        )
+        artifact_name = f"{base_name}-{release_date}-{immortalwrt_commit}-{short_image}"
+        release_title = f"{display_name} ESXi OVA - {release_date} {immortalwrt_commit}"
+    else:
+        release_tag = f"openwrt-{base_name}-{short_image}"
+        release_title = f"{display_name} ESXi OVA ({short_image})"
+        artifact_name = f"{base_name}-{short_image}"
+    return release_tag, release_title, artifact_name
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -224,21 +258,12 @@ def build_image(
     base_name = sanitize_name(image.name)
     short_image = image_sha[:12]
     key = f"{image_sha}:{BUILDER_VERSION}"
-    if release_date and immortalwrt_commit:
-        release_date = sanitize_tag_component(release_date)
-        immortalwrt_commit = sanitize_tag_component(immortalwrt_commit)
-        release_tag = "openwrt-{base}-{date}-{commit}-{image}".format(
-            base=base_name,
-            date=release_date,
-            commit=immortalwrt_commit,
-            image=short_image,
-        )
-        artifact_name = f"{base_name}-{release_date}-{immortalwrt_commit}-{short_image}"
-        release_title = f"ImmortalWrt x86_64 ESXi OVA - {release_date} {immortalwrt_commit}"
-    else:
-        release_tag = f"openwrt-{base_name}-{short_image}"
-        release_title = f"{base_name} ESXi OVA ({short_image})"
-        artifact_name = f"{base_name}-{short_image}"
+    release_tag, release_title, artifact_name = release_metadata(
+        base_name,
+        short_image,
+        release_date=release_date,
+        immortalwrt_commit=immortalwrt_commit,
+    )
     image_asset = f"{artifact_name}.img.gz"
     out_dir.mkdir(parents=True, exist_ok=True)
 
