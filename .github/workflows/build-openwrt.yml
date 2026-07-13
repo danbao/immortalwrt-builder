@@ -200,6 +200,8 @@ jobs:
 
       - name: Record converted images
         if: steps.convert.outputs.count != '0' && env.PUBLISH_RELEASE == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           mapfile -t release_tags < <(python3 -c 'import json; print("\n".join(item["release_tag"] for item in json.load(open("dist/build-results.json"))["built"]))')
           python3 scripts/openwrt_img_to_ova.py record \
