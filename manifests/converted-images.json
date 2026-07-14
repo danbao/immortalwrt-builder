@@ -69,6 +69,18 @@
       "release_date": "20260630",
       "release_tag": "openwrt-immortalwrt-x86-64-20260630-cf234f8de6d5-2464df6568c5"
     },
+    "2a91a54b6e9df8aad4055ab490eddadae3e7508d68847374c3652d7b430efc79:8": {
+      "builder_version": "8",
+      "checksum_asset": "immortalwrt-x86-64-daed-esxi-20260715-cf234f8de6d5-2a91a54b6e9d.ova.sha256",
+      "image_asset": "immortalwrt-x86-64-daed-20260715-cf234f8de6d5-2a91a54b6e9d.img.gz",
+      "image_path": "build-out/immortalwrt-x86-64-daed.img.gz",
+      "image_sha256": "2a91a54b6e9df8aad4055ab490eddadae3e7508d68847374c3652d7b430efc79",
+      "immortalwrt_commit": "cf234f8de6d5",
+      "immortalwrt_version_code": "r33869-cf234f8de6d5",
+      "ova_asset": "immortalwrt-x86-64-daed-esxi-20260715-cf234f8de6d5-2a91a54b6e9d.ova",
+      "release_date": "20260715",
+      "release_tag": "openwrt-immortalwrt-x86-64-daed-20260715-cf234f8de6d5-2a91a54b6e9d"
+    },
     "33a8f83e550774b1b48e06dd03d409d5a4677ef70a0064fdf14e51e999cad259:7": {
       "builder_version": "7",
       "checksum_asset": "immortalwrt-x86-64-esxi-20260628-cf234f8de6d5-33a8f83e5507.ova.sha256",
@@ -91,6 +103,18 @@
       "ova_asset": "immortalwrt-x86-64-esxi-34d277b73b7e.ova",
       "release_date": "20260616",
       "release_tag": "openwrt-immortalwrt-x86-64-20260616-cf234f8de6d5-34d277b73b7e"
+    },
+    "39ed729db0261b9c257d0d0aee00f718cd33cf3cb4a689c091d90836bdc5c659:8": {
+      "builder_version": "8",
+      "checksum_asset": "immortalwrt-x86-64-esxi-20260715-cf234f8de6d5-39ed729db026.ova.sha256",
+      "image_asset": "immortalwrt-x86-64-20260715-cf234f8de6d5-39ed729db026.img.gz",
+      "image_path": "build-out/immortalwrt-x86-64.img.gz",
+      "image_sha256": "39ed729db0261b9c257d0d0aee00f718cd33cf3cb4a689c091d90836bdc5c659",
+      "immortalwrt_commit": "cf234f8de6d5",
+      "immortalwrt_version_code": "r33869-cf234f8de6d5",
+      "ova_asset": "immortalwrt-x86-64-esxi-20260715-cf234f8de6d5-39ed729db026.ova",
+      "release_date": "20260715",
+      "release_tag": "openwrt-immortalwrt-x86-64-20260715-cf234f8de6d5-39ed729db026"
     },
     "3aeeb0b764f24b689963afbaced7c039fc1a0fc91c57778929c09a9611c672ff:7": {
       "builder_version": "7",
