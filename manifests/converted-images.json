@@ -268,6 +268,18 @@
       "release_date": "20260621",
       "release_tag": "openwrt-immortalwrt-x86-64-20260621-cf234f8de6d5-893ee91e970b"
     },
+    "8ef3977e18348ed26e064431bd70de3b1ae89e786f3caab58601eea6929035b5:8": {
+      "builder_version": "8",
+      "checksum_asset": "immortalwrt-x86-64-daed-esxi-20260720-cf234f8de6d5-8ef3977e1834.ova.sha256",
+      "image_asset": "immortalwrt-x86-64-daed-20260720-cf234f8de6d5-8ef3977e1834.img.gz",
+      "image_path": "build-out/immortalwrt-x86-64-daed.img.gz",
+      "image_sha256": "8ef3977e18348ed26e064431bd70de3b1ae89e786f3caab58601eea6929035b5",
+      "immortalwrt_commit": "cf234f8de6d5",
+      "immortalwrt_version_code": "r33869-cf234f8de6d5",
+      "ova_asset": "immortalwrt-x86-64-daed-esxi-20260720-cf234f8de6d5-8ef3977e1834.ova",
+      "release_date": "20260720",
+      "release_tag": "openwrt-immortalwrt-x86-64-daed-20260720-cf234f8de6d5-8ef3977e1834"
+    },
     "979952b26d2cd08f8d5d7ec38be9c32556057ad2397cdccbd81fc992185bf93c:7": {
       "builder_version": "7",
       "checksum_asset": "immortalwrt-x86-64-esxi-20260626-cf234f8de6d5-979952b26d2c.ova.sha256",
@@ -351,6 +363,18 @@
       "ova_asset": "immortalwrt-x86-64-esxi-20260709-cf234f8de6d5-cf9fbca1f040.ova",
       "release_date": "20260709",
       "release_tag": "openwrt-immortalwrt-x86-64-20260709-cf234f8de6d5-cf9fbca1f040"
+    },
+    "df9c24b5655112b5205de24173ec085c81db29063be448fa904ac26f93edde8e:8": {
+      "builder_version": "8",
+      "checksum_asset": "immortalwrt-x86-64-esxi-20260720-cf234f8de6d5-df9c24b56551.ova.sha256",
+      "image_asset": "immortalwrt-x86-64-20260720-cf234f8de6d5-df9c24b56551.img.gz",
+      "image_path": "build-out/immortalwrt-x86-64.img.gz",
+      "image_sha256": "df9c24b5655112b5205de24173ec085c81db29063be448fa904ac26f93edde8e",
+      "immortalwrt_commit": "cf234f8de6d5",
+      "immortalwrt_version_code": "r33869-cf234f8de6d5",
+      "ova_asset": "immortalwrt-x86-64-esxi-20260720-cf234f8de6d5-df9c24b56551.ova",
+      "release_date": "20260720",
+      "release_tag": "openwrt-immortalwrt-x86-64-20260720-cf234f8de6d5-df9c24b56551"
     },
     "e1a56734862d27b5566f4b7586816c1ac9436935eecb165751f4e57775dcab30:7": {
       "builder_version": "7",
