@@ -1,0 +1,353 @@
+import argparse
+import gzip
+import json
+import io
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+import openwrt_build_preflight as preflight
+
+
+class OpenWrtBuildPreflightTests(unittest.TestCase):
+    def test_daed_package_list_excludes_conflicting_proxy_stacks(self) -> None:
+        package_file = Path(__file__).resolve().parents[1] / "config" / "openwrt-packages-daed.txt"
+        packages = set(preflight.read_packages(package_file))
+        self.assertIn("luci-app-daede", packages)
+        self.assertIn("daed", packages)
+        self.assertIn("luci-app-mosdns", packages)
+        self.assertNotIn("luci-app-passwall2", packages)
+        self.assertNotIn("luci-app-openclash", packages)
+        self.assertNotIn("luci-app-nikki", packages)
+        self.assertNotIn("luci-i18n-nikki-zh-cn", packages)
+        self.assertNotIn("mihomo-meta", packages)
+
+    def test_read_packages_ignores_comments_and_rejects_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            package_file = Path(tmp_s) / "packages.txt"
+            package_file.write_text(
+                """
+                # base UI
+                luci luci-base
+                curl # inline comment
+                """,
+                encoding="utf-8",
+            )
+            self.assertEqual(preflight.read_packages(package_file), ["luci", "luci-base", "curl"])
+
+            package_file.write_text("luci\nluci\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate package"):
+                preflight.read_packages(package_file)
+
+    def test_read_feeds_parses_required_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            feed_file = Path(tmp_s) / "feeds.tsv"
+            feed_file.write_text(
+                "# name\turl\trequired\nnikki\thttps://example.test/feed/\ttrue\noptional\thttps://example.test/optional\tfalse\n",
+                encoding="utf-8",
+            )
+            feeds = preflight.read_feeds(feed_file)
+            self.assertEqual(feeds[0], preflight.Feed("nikki", "https://example.test/feed", True))
+            self.assertEqual(feeds[1], preflight.Feed("optional", "https://example.test/optional", False))
+
+    def test_read_feeds_parses_explicit_verification_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            feed_file = Path(tmp_s) / "feeds.tsv"
+            feed_file.write_text(
+                "# name\turl\trequired\tverification\n"
+                "nikki\thttps://example.test/feed\ttrue\tallow-untrusted\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                preflight.read_feeds(feed_file),
+                [preflight.Feed("nikki", "https://example.test/feed", True, "allow-untrusted")],
+            )
+
+    def test_parse_feeds_buildinfo_requires_commit_pinned_sources(self) -> None:
+        commit = "a" * 40
+        feeds = preflight.parse_feeds_buildinfo(
+            f"src-git packages https://github.com/immortalwrt/packages.git^{commit}\n"
+        )
+        self.assertEqual(feeds["packages"]["commit"], commit)
+        self.assertIn(commit, feeds["packages"]["archive_url"])
+        with self.assertRaisesRegex(ValueError, "contains no pinned feeds"):
+            preflight.parse_feeds_buildinfo(
+                "src-git packages https://github.com/immortalwrt/packages.git\n"
+            )
+
+    def test_select_release_asset_requires_exactly_one_match(self) -> None:
+        assets = [{"name": "luci-app-demo_1_all.ipk"}, {"name": "demo.tar.gz"}]
+        self.assertEqual(preflight.select_release_asset(assets, "luci-app-demo_*_all.ipk")["name"], "luci-app-demo_1_all.ipk")
+        with self.assertRaisesRegex(ValueError, "found 0"):
+            preflight.select_release_asset(assets, "missing*")
+        with self.assertRaisesRegex(ValueError, "found 2"):
+            preflight.select_release_asset(assets, "*")
+
+    def test_parse_sha256sums_requires_one_archive_entry(self) -> None:
+        payload = "abc123  immortalwrt-imagebuilder-24.10.6-x86-64.Linux-x86_64.tar.zst\n"
+        self.assertEqual(
+            preflight.parse_sha256sums(payload, "immortalwrt-imagebuilder-24.10.6-x86-64.Linux-x86_64.tar.zst"),
+            "abc123",
+        )
+        with self.assertRaisesRegex(ValueError, "found 0"):
+            preflight.parse_sha256sums(payload, "missing.tar.zst")
+
+    def test_verify_release_asset_checks_api_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            asset = Path(tmp_s) / "demo.ipk"
+            asset.write_bytes(b"trusted package")
+            digest = preflight.sha256_file(asset)
+            record = preflight.verify_release_asset(
+                {"id": 7, "name": asset.name, "size": asset.stat().st_size, "digest": f"sha256:{digest}"},
+                asset,
+                allow_missing_digest=True,
+            )
+            self.assertEqual(record["verification_status"], "verified-api-digest")
+            self.assertEqual(record["sha256"], digest)
+
+            with self.assertRaisesRegex(ValueError, "sha256 mismatch"):
+                preflight.verify_release_asset(
+                    {"id": 7, "name": asset.name, "size": asset.stat().st_size, "digest": f"sha256:{'0' * 64}"},
+                    asset,
+                    allow_missing_digest=True,
+                )
+
+    def test_verify_release_asset_marks_missing_digest_as_unverified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            asset = Path(tmp_s) / "demo.ipk"
+            asset.write_bytes(b"legacy package")
+            record = preflight.verify_release_asset(
+                {"id": 8, "name": asset.name, "size": asset.stat().st_size, "digest": None},
+                asset,
+                allow_missing_digest=True,
+            )
+            self.assertEqual(record["verification_status"], "unverified-upstream")
+            with self.assertRaisesRegex(ValueError, "does not provide a digest"):
+                preflight.verify_release_asset(
+                    {"id": 8, "name": asset.name, "size": asset.stat().st_size, "digest": None},
+                    asset,
+                    allow_missing_digest=False,
+                )
+
+    def test_release_asset_snapshot_rejects_metadata_changes(self) -> None:
+        release = {"tag_name": "v1", "id": 10}
+        asset = {"id": 20, "name": "demo.ipk", "size": 3, "updated_at": "2026-07-01T00:00:00Z", "digest": None}
+        preflight.ensure_release_asset_unchanged(release, asset, dict(release), dict(asset))
+        changed = dict(asset, updated_at="2026-07-02T00:00:00Z")
+        with self.assertRaisesRegex(RuntimeError, "changed during download"):
+            preflight.ensure_release_asset_unchanged(release, asset, dict(release), changed)
+
+    def test_parse_package_index_requires_license_source_and_hash(self) -> None:
+        payload = (
+            "Package: demo\n"
+            "Version: 1.2.3\n"
+            "License: MIT\n"
+            "Source: feeds/packages/demo\n"
+            "Filename: demo_1.2.3_x86_64.ipk\n"
+            f"SHA256sum: {'a' * 64}\n"
+            "Size: 123\n\n"
+        )
+        records = preflight.parse_package_index(payload, "https://example.test/feed")
+        self.assertEqual(records[0]["package"], "demo")
+        self.assertEqual(records[0]["license"], "MIT")
+        self.assertEqual(records[0]["download_url"], "https://example.test/feed/demo_1.2.3_x86_64.ipk")
+
+        with self.assertRaisesRegex(ValueError, "missing License"):
+            preflight.parse_package_index(payload.replace("License: MIT\n", ""), "https://example.test/feed")
+
+    def test_bounded_gzip_decompress_rejects_expansion_over_limit(self) -> None:
+        payload = gzip.compress(b"a" * 1024)
+        self.assertEqual(preflight.bounded_gzip_decompress(payload, max_bytes=1024), b"a" * 1024)
+        with self.assertRaisesRegex(ValueError, "decompressed size limit"):
+            preflight.bounded_gzip_decompress(payload, max_bytes=1023)
+
+    def test_mirror_feed_hash_verifies_packages_under_untrusted_key_exception(self) -> None:
+        package_bytes = b"verified package"
+        digest = preflight.hashlib.sha256(package_bytes).hexdigest()
+        manifest = (
+            "Package: demo\n"
+            "Version: 1.2.3\n"
+            "Filename: demo_1.2.3_x86_64.ipk\n"
+            f"SHA256sum: {digest}\n"
+            f"Size: {len(package_bytes)}\n\n"
+        ).encode()
+        packages = gzip.compress(manifest)
+        signature = b"untrusted upstream signature"
+
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+
+            def fake_download(_url: str, target: Path, **_kwargs: object) -> None:
+                target.write_bytes(package_bytes)
+
+            with (
+                mock.patch.object(
+                    preflight,
+                    "fetch_bytes",
+                    side_effect=[packages, manifest, signature, packages, manifest, signature],
+                ),
+                mock.patch.object(preflight, "download_url", side_effect=fake_download),
+            ):
+                preflight.mirror_feed(
+                    preflight.Feed("demo", "https://example.test/feed", True, "allow-untrusted"),
+                    output_dir=tmp / "packages",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                    timeout=1,
+                    retries=1,
+                )
+
+            provenance = json.loads((tmp / "provenance.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                provenance["records"][0]["verification_status"],
+                "hash-verified-packages-untrusted-signing-key",
+            )
+            self.assertEqual((tmp / "packages" / "demo_1.2.3_x86_64.ipk").read_bytes(), package_bytes)
+
+    def test_mirror_feed_rejects_package_hash_mismatch_and_metadata_changes(self) -> None:
+        package_bytes = b"expected package"
+        digest = preflight.hashlib.sha256(package_bytes).hexdigest()
+        manifest = (
+            "Package: demo\n"
+            "Version: 1.2.3\n"
+            "Filename: demo_1.2.3_x86_64.ipk\n"
+            f"SHA256sum: {digest}\n"
+            f"Size: {len(package_bytes)}\n\n"
+        ).encode()
+        feed = preflight.Feed("demo", "https://example.test/feed", True, "allow-untrusted")
+
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+
+            def corrupt_download(_url: str, target: Path, **_kwargs: object) -> None:
+                target.write_bytes(b"corrupt package!")
+
+            with (
+                mock.patch.object(
+                    preflight,
+                    "fetch_bytes",
+                    side_effect=[gzip.compress(manifest), manifest, b"signature"],
+                ),
+                mock.patch.object(preflight, "download_url", side_effect=corrupt_download),
+                self.assertRaisesRegex(ValueError, "sha256 mismatch"),
+            ):
+                preflight.mirror_feed(
+                    feed,
+                    output_dir=tmp / "packages",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                    timeout=1,
+                    retries=1,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+
+            def valid_download(_url: str, target: Path, **_kwargs: object) -> None:
+                target.write_bytes(package_bytes)
+
+            with (
+                mock.patch.object(
+                    preflight,
+                    "fetch_bytes",
+                    side_effect=[
+                        gzip.compress(manifest),
+                        manifest,
+                        b"signature",
+                        gzip.compress(manifest + b"\n"),
+                        manifest,
+                        b"signature",
+                    ],
+                ),
+                mock.patch.object(preflight, "download_url", side_effect=valid_download),
+                self.assertRaisesRegex(RuntimeError, "changed while mirroring"),
+            ):
+                preflight.mirror_feed(
+                    feed,
+                    output_dir=tmp / "packages",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                    timeout=1,
+                    retries=1,
+                )
+
+    def test_mirror_feed_rejects_manifest_package_index_mismatch(self) -> None:
+        manifest = (
+            "Package: demo\nVersion: 1\nFilename: demo.ipk\n"
+            f"SHA256sum: {'a' * 64}\nSize: 1\n\n"
+        ).encode()
+        package_index = manifest.replace(b"Version: 1", b"Version: 2")
+        with tempfile.TemporaryDirectory() as tmp_s, mock.patch.object(
+            preflight,
+            "fetch_bytes",
+            side_effect=[gzip.compress(package_index), manifest, b"signature"],
+        ), self.assertRaisesRegex(RuntimeError, "does not match"):
+            tmp = Path(tmp_s)
+            preflight.mirror_feed(
+                preflight.Feed("demo", "https://example.test/feed", True, "allow-untrusted"),
+                output_dir=tmp / "packages",
+                package_index=tmp / "package-index.json",
+                provenance=tmp / "provenance.json",
+                timeout=1,
+                retries=1,
+            )
+
+    def test_copy_raw_images_handles_multiple_built_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            build_out = tmp / "build-out"
+            dist = tmp / "dist"
+            build_out.mkdir()
+            standard = build_out / "immortalwrt-x86-64.img.gz"
+            daed = build_out / "immortalwrt-x86-64-daed.img.gz"
+            standard.write_bytes(b"standard")
+            daed.write_bytes(b"daed")
+            results = tmp / "build-results.json"
+            results.write_text(
+                json.dumps(
+                    {
+                        "built": [
+                            {
+                                "image_path": str(standard),
+                                "image_asset": "immortalwrt-x86-64-20260713.img.gz",
+                            },
+                            {
+                                "image_path": str(daed),
+                                "image_asset": "immortalwrt-x86-64-daed-20260713.img.gz",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(results=results, source_dir=build_out, out_dir=dist)
+            self.assertEqual(preflight.cmd_copy_raw_images(args), 0)
+            self.assertEqual((dist / "immortalwrt-x86-64-20260713.img.gz").read_bytes(), b"standard")
+            self.assertEqual((dist / "immortalwrt-x86-64-daed-20260713.img.gz").read_bytes(), b"daed")
+            self.assertIn(
+                "immortalwrt-x86-64-20260713.img.gz",
+                (dist / "immortalwrt-x86-64-20260713.img.gz.sha256").read_text(encoding="utf-8"),
+            )
+
+    def test_safe_extract_tar_rejects_parent_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            archive_path = tmp / "unsafe.tar.gz"
+            with tarfile.open(archive_path, "w:gz") as archive:
+                info = tarfile.TarInfo("../escaped.ipk")
+                payload = b"malicious"
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+            with self.assertRaises((tarfile.TarError, ValueError)):
+                preflight.safe_extract_tar(archive_path, tmp / "extract")
+            self.assertFalse((tmp / "escaped.ipk").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

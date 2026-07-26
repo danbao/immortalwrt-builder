@@ -1,0 +1,3 @@
+# name	url	required	verification	source
+nikki	https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki	true	allow-untrusted	https://github.com/nikkinikki-org/OpenWrt-nikki
+passwall_packages	https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall_packages	true	allow-untrusted	https://github.com/Openwrt-Passwall/openwrt-passwall-packages

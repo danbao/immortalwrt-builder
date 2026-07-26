@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "components": [
+    {
+      "name": "OpenClash",
+      "license": "MIT",
+      "source": "https://github.com/vernesong/OpenClash",
+      "packages": [
+        "luci-app-openclash"
+      ]
+    },
+    {
+      "name": "OpenWrt Nikki",
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/nikkinikki-org/OpenWrt-nikki",
+      "packages": [
+        "luci-app-nikki",
+        "luci-i18n-nikki-*",
+        "nikki",
+        "mihomo-*"
+      ]
+    },
+    {
+      "name": "PassWall 2",
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/Openwrt-Passwall/openwrt-passwall2",
+      "packages": [
+        "luci-app-passwall2"
+      ]
+    },
+    {
+      "name": "LuCI Tailscale",
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/asvow/luci-app-tailscale",
+      "packages": [
+        "luci-app-tailscale"
+      ]
+    },
+    {
+      "name": "LuCI MosDNS",
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/sbwml/luci-app-mosdns",
+      "packages": [
+        "luci-app-mosdns",
+        "mosdns",
+        "v2dat"
+      ]
+    },
+    {
+      "name": "daed",
+      "license": "AGPL-3.0-only",
+      "source": "https://github.com/daeuniverse/daed",
+      "packages": [
+        "daed"
+      ]
+    },
+    {
+      "name": "LuCI daede",
+      "license": "AGPL-3.0-only",
+      "source": "https://github.com/kenzok8/openwrt-daede",
+      "packages": [
+        "luci-app-daede"
+      ]
+    }
+  ]
+}

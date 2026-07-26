@@ -1,0 +1,288 @@
+name: Build ImmortalWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      ib_version:
+        description: ImmortalWrt ImageBuilder version
+        required: true
+        default: "24.10.6"
+      publish_release:
+        description: Publish GitHub Releases after all checks pass
+        required: true
+        default: false
+        type: boolean
+  schedule:
+    # Checked every Monday 02:00 Asia/Shanghai; a fixed epoch enforces an exact 14-day cadence.
+    - cron: "0 18 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-immortalwrt
+  cancel-in-progress: false
+
+env:
+  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '24.10.6' }}
+
+jobs:
+  schedule:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Check biweekly schedule
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "should_build=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          epoch="$(TZ=Asia/Shanghai date -d '2026-01-05 00:00:00' +%s)"
+          now="$(TZ=Asia/Shanghai date +%s)"
+          elapsed_days="$(((now - epoch) / 86400))"
+          if [ "$((elapsed_days % 14))" -eq 0 ]; then
+            echo "should_build=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "should_build=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  build:
+    needs: schedule
+    if: needs.schedule.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      count: ${{ steps.convert.outputs.count }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext \
+            libssl-dev xsltproc rsync wget unzip python3 zstd qemu-utils
+
+      - name: Download verified ImageBuilder
+        run: |
+          python3 scripts/openwrt_build_preflight.py imagebuilder-info \
+            --version "${IB_VERSION}" \
+            --target "x86/64" \
+            --github-env "${GITHUB_ENV}" \
+            --retries 8 \
+            --timeout 30
+          source "${GITHUB_ENV}"
+          python3 scripts/openwrt_build_preflight.py download-url \
+            --url "${IB_BASE_URL}/${IB_ARCHIVE}" \
+            --output "${IB_ARCHIVE}" \
+            --sha256 "${IB_ARCHIVE_SHA256}" \
+            --retries 8 \
+            --timeout 300
+          tar --zstd -xf "${IB_ARCHIVE}"
+          mv "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64" imagebuilder
+
+      - name: Collect release metadata
+        run: |
+          source "${GITHUB_ENV}"
+          version_code="$(curl -fsSL --retry 8 --retry-delay 5 --connect-timeout 30 "${IB_BASE_URL}/version.buildinfo" | tr -d '[:space:]')"
+          immortalwrt_commit="${version_code##*-}"
+          if [ -z "${version_code}" ] || [ "${immortalwrt_commit}" = "${version_code}" ]; then
+            echo "Failed to parse ImmortalWrt version.buildinfo: ${version_code}" >&2
+            exit 1
+          fi
+          {
+            echo "BUILD_DATE=$(TZ=Asia/Shanghai date +%Y%m%d)"
+            echo "IMMORTALWRT_VERSION_CODE=${version_code}"
+            echo "IMMORTALWRT_COMMIT=${immortalwrt_commit}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Disable auxiliary image formats
+        run: |
+          cd imagebuilder
+          sed -i \
+            -e 's/^CONFIG_ISO_IMAGES=y/# CONFIG_ISO_IMAGES is not set/' \
+            -e 's/^CONFIG_QCOW2_IMAGES=y/# CONFIG_QCOW2_IMAGES is not set/' \
+            -e 's/^CONFIG_VDI_IMAGES=y/# CONFIG_VDI_IMAGES is not set/' \
+            -e 's/^CONFIG_VMDK_IMAGES=y/# CONFIG_VMDK_IMAGES is not set/' \
+            -e 's/^CONFIG_VHDX_IMAGES=y/# CONFIG_VHDX_IMAGES is not set/' \
+            .config
+
+      - name: Mirror third-party feeds without disabling official signatures
+        run: |
+          mkdir -p dist/metadata
+          mkdir -p imagebuilder/packages
+          python3 scripts/openwrt_build_preflight.py mirror-feeds \
+            --feed-file config/third-party-feeds.tsv \
+            --dir imagebuilder/packages \
+            --package-index dist/metadata/package-index.json \
+            --provenance dist/metadata/upstream-provenance.json \
+            --retries 3 \
+            --timeout 120
+          python3 scripts/openwrt_build_preflight.py collect-package-indexes \
+            --repositories-conf imagebuilder/repositories.conf \
+            --package-index dist/metadata/package-index.json \
+            --provenance dist/metadata/upstream-provenance.json \
+            --retries 3 \
+            --timeout 60
+
+      - name: Download inspected release assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cd imagebuilder
+          mkdir -p packages
+          download_asset() {
+            python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
+              --repo "$1" \
+              --pattern "$2" \
+              --dir "$3" \
+              --provenance "${GITHUB_WORKSPACE}/dist/metadata/upstream-provenance.json" \
+              --allow-missing-digest \
+              --retries 8 \
+              --timeout "$4"
+          }
+          download_asset Openwrt-Passwall/openwrt-passwall2 'luci-app-passwall2_*_all.ipk' packages 60
+          download_asset asvow/luci-app-tailscale 'luci-app-tailscale_*_all.ipk' packages 60
+          download_asset sbwml/luci-app-mosdns 'x86_64-openwrt-24.10.tar.gz' /tmp/mosdns 120
+          download_asset kenzok8/openwrt-daede 'luci-app-daede_*_all.ipk' packages 60
+          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
+            --archive /tmp/mosdns/x86_64-openwrt-24.10.tar.gz \
+            --target /tmp/mosdns/extract
+          find /tmp/mosdns/extract -type f -name '*.ipk' -print -exec mv -f {} packages/ \;
+
+      - name: Resolve exact source references
+        run: |
+          source "${GITHUB_ENV}"
+          python3 scripts/openwrt_build_preflight.py resolve-source-refs \
+            --components config/third-party-components.json \
+            --feed-file config/third-party-feeds.tsv \
+            --provenance dist/metadata/upstream-provenance.json \
+            --feeds-buildinfo-url "${IB_BASE_URL}/feeds.buildinfo" \
+            --immortalwrt-commit "${IMMORTALWRT_COMMIT}" \
+            --out dist/metadata/source-refs.json \
+            --retries 5 \
+            --timeout 30
+
+      - name: Build images and package manifests
+        run: |
+          cd imagebuilder
+          build_flavor() {
+            flavor="$1"
+            package_file="$2"
+            output_name="$3"
+            manifest_name="$4"
+
+            packages="$(python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" package-string --package-file "${package_file}")"
+            make manifest PROFILE="generic" PACKAGES="${packages}" | tee "/tmp/${manifest_name}.log"
+            awk '/^[A-Za-z0-9_.+:-]+ - / {print}' "/tmp/${manifest_name}.log" \
+              > "${GITHUB_WORKSPACE}/build-out/${manifest_name}"
+            test -s "${GITHUB_WORKSPACE}/build-out/${manifest_name}"
+            rm -rf bin/targets/x86/64
+            make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="${packages}"
+
+            shopt -s nullglob
+            images=(bin/targets/x86/64/*squashfs-combined-efi.img.gz)
+            if [ "${#images[@]}" -ne 1 ]; then
+              echo "Expected exactly one ${flavor} squashfs EFI image, found ${#images[@]}" >&2
+              exit 1
+            fi
+            cp "${images[0]}" "${GITHUB_WORKSPACE}/build-out/${output_name}"
+          }
+
+          mkdir -p "${GITHUB_WORKSPACE}/build-out"
+          build_flavor standard "${GITHUB_WORKSPACE}/config/openwrt-packages.txt" \
+            immortalwrt-x86-64.img.gz standard.packages.manifest
+          build_flavor daed "${GITHUB_WORKSPACE}/config/openwrt-packages-daed.txt" \
+            immortalwrt-x86-64-daed.img.gz daed.packages.manifest
+
+      - name: Convert and assemble release bundle
+        id: convert
+        run: |
+          python3 scripts/openwrt_img_to_ova.py scan \
+            --img-dir build-out \
+            --manifest dist/release-state.json \
+            --out-dir dist \
+            --results dist/build-results.json \
+            --nic-count 1 \
+            --release-date "${BUILD_DATE}" \
+            --immortalwrt-version-code "${IMMORTALWRT_VERSION_CODE}" \
+            --immortalwrt-commit "${IMMORTALWRT_COMMIT}"
+          python3 scripts/openwrt_build_preflight.py copy-raw-images \
+            --results dist/build-results.json \
+            --source-dir build-out \
+            --out-dir dist
+          python3 scripts/generate_release_metadata.py \
+            --standard-manifest build-out/standard.packages.manifest \
+            --daed-manifest build-out/daed.packages.manifest \
+            --components config/third-party-components.json \
+            --package-index dist/metadata/package-index.json \
+            --provenance dist/metadata/upstream-provenance.json \
+            --source-refs dist/metadata/source-refs.json \
+            --results dist/build-results.json \
+            --out-dir dist/metadata \
+            --imagebuilder-version "${IB_VERSION}" \
+            --imagebuilder-sha256 "${IB_ARCHIVE_SHA256}" \
+            --immortalwrt-version-code "${IMMORTALWRT_VERSION_CODE}" \
+            --immortalwrt-commit "${IMMORTALWRT_COMMIT}" \
+            --build-date "${BUILD_DATE}" \
+            --repository "${GITHUB_REPOSITORY}"
+          count="$(python3 -c 'import json; print(len(json.load(open("dist/build-results.json"))["built"]))')"
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload verified release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: immortalwrt-release-bundle-${{ github.run_id }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: >-
+      needs.build.outputs.count != '0' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download verified release bundle
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: immortalwrt-release-bundle-${{ github.run_id }}
+          path: dist
+
+      - name: Attest firmware provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: |
+            dist/*.img.gz
+            dist/*.ova
+
+      - name: Publish releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/publish_releases.py \
+            dist/build-results.json \
+            --metadata-dir dist/metadata \
+            --keep-releases 30
