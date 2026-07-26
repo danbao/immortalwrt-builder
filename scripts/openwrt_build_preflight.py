@@ -606,10 +606,31 @@ def resolve_source_refs(
         and record.get("repository")
         and record.get("release_tag")
     }
+    feed_refs = parse_feeds_buildinfo(feeds_buildinfo)
+    feed_refs_by_repository = {
+        str(record["repository"]): record for record in feed_refs.values()
+    }
     component_refs: dict[str, dict[str, str]] = {}
     for component in registry.get("components", []):
         source = str(component.get("source", ""))
         repo = github_repo_from_source(source)
+        if source == "https://github.com/immortalwrt/immortalwrt":
+            component_refs[source] = {
+                "repository": source,
+                "ref_type": "commit",
+                "ref": resolved_immortalwrt_commit,
+                "source": f"{source}/tree/{resolved_immortalwrt_commit}",
+                "archive_url": f"{source}/archive/{resolved_immortalwrt_commit}.tar.gz",
+            }
+            continue
+        feed_ref = feed_refs_by_repository.get(source)
+        if feed_ref:
+            component_refs[source] = {
+                **feed_ref,
+                "ref_type": "commit",
+                "ref": feed_ref["commit"],
+            }
+            continue
         tag = release_tags.get(repo)
         if tag:
             component_refs[source] = {
@@ -636,7 +657,6 @@ def resolve_source_refs(
             "archive_url": f"{source}/archive/{commit}.tar.gz",
             "artifact_source_relation": "unverified-upstream",
         }
-    feed_refs = parse_feeds_buildinfo(feeds_buildinfo)
     for feed in read_feeds(feed_file):
         if not feed.source:
             raise ValueError(f"feed has no source repository: {feed.name}")

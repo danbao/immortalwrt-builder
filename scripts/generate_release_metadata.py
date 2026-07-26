@@ -40,6 +40,13 @@ def validate_component(component: dict[str, object], label: str) -> None:
     source = str(component["source"])
     if not source.startswith("https://"):
         raise ValueError(f"{label} source must use https: {source}")
+    raw_source_path = str(component.get("source_path", ""))
+    source_path = raw_source_path.strip("/")
+    if source_path and (".." in Path(source_path).parts or raw_source_path.startswith("/")):
+        raise ValueError(f"{label} has invalid source_path: {raw_source_path}")
+    upstream_source = str(component.get("upstream_source", ""))
+    if upstream_source and not upstream_source.startswith("https://"):
+        raise ValueError(f"{label} upstream_source must use https: {upstream_source}")
 
 
 def load_components(path: Path) -> dict[str, object]:
@@ -70,7 +77,8 @@ def exact_component_source(component: dict[str, object], source_refs: dict[str, 
     exact_source = str(record.get("source", "")) if isinstance(record, dict) else ""
     if not exact_source.startswith(f"{source}/tree/"):
         raise ValueError(f"missing exact source ref for component: {component['name']}")
-    return exact_source
+    source_path = str(component.get("source_path", "")).strip("/")
+    return f"{exact_source.rstrip('/')}/{source_path}" if source_path else exact_source
 
 
 def exact_index_source(record: dict[str, object], source_refs: dict[str, object]) -> str:
@@ -123,12 +131,32 @@ def generate_spdx(
     namespace: str,
 ) -> dict[str, object]:
     spdx_packages = []
+    extracted_licenses: dict[str, dict[str, object]] = {}
     for index, (name, version) in enumerate(sorted(packages.items()), start=1):
         component = component_for_package(name, registry)
         if component is not None:
             license_id = component["license"]
             download_location = exact_component_source(component, source_refs)
             source_comment = f"source family: {component['name']}"
+            version_pattern = str(component.get("version_pattern", ""))
+            if version_pattern and not fnmatch.fnmatch(version, version_pattern):
+                raise ValueError(
+                    f"component version is not covered by reviewed metadata: "
+                    f"{name} {version} (expected {version_pattern})"
+                )
+            upstream_source = str(component.get("upstream_source", ""))
+            if upstream_source:
+                source_comment += f"; upstream source: {upstream_source}"
+            if str(license_id).startswith("LicenseRef-"):
+                license_text = str(component.get("license_text", ""))
+                if not license_text:
+                    raise ValueError(f"missing extracted license text for component: {component['name']}")
+                extracted_licenses[str(license_id)] = {
+                    "licenseId": license_id,
+                    "extractedText": license_text,
+                    "name": component["name"],
+                    "seeAlsos": [component["license_url"]] if component.get("license_url") else [],
+                }
         else:
             candidates = package_index.get((name, version), [])
             if len(candidates) != 1:
@@ -158,7 +186,7 @@ def generate_spdx(
                 "comment": source_comment,
             }
         )
-    return {
+    document = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
@@ -170,6 +198,11 @@ def generate_spdx(
         },
         "packages": spdx_packages,
     }
+    if extracted_licenses:
+        document["hasExtractedLicensingInfos"] = [
+            extracted_licenses[key] for key in sorted(extracted_licenses)
+        ]
+    return document
 
 
 def release_item_for_flavor(results: dict[str, object], flavor: str) -> dict[str, object]:

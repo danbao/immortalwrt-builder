@@ -2,6 +2,96 @@
   "schema_version": 1,
   "components": [
     {
+      "name": "ImmortalWrt autocore",
+      "license": "GPL-2.0-only",
+      "source": "https://github.com/immortalwrt/immortalwrt",
+      "source_path": "package/emortal/autocore",
+      "packages": [
+        "autocore"
+      ]
+    },
+    {
+      "name": "ImmortalWrt automount",
+      "license": "GPL-2.0-only",
+      "source": "https://github.com/immortalwrt/immortalwrt",
+      "source_path": "package/emortal/automount",
+      "packages": [
+        "automount",
+        "ntfs3-mount"
+      ]
+    },
+    {
+      "name": "Linux kernel",
+      "license": "GPL-2.0-only",
+      "source": "https://github.com/immortalwrt/immortalwrt",
+      "source_path": "target/linux/x86",
+      "packages": [
+        "kernel"
+      ]
+    },
+    {
+      "name": "musl libc",
+      "license": "MIT",
+      "source": "https://github.com/immortalwrt/immortalwrt",
+      "source_path": "toolchain/musl",
+      "packages": [
+        "libc"
+      ]
+    },
+    {
+      "name": "Broadcom bnx2 firmware",
+      "license": "LicenseRef-Broadcom-Firmware",
+      "license_text": "This file contains firmware data derived from proprietary unpublished source code, Copyright (c) 2004 - 2010 Broadcom Corporation. Permission is hereby granted for the distribution of this firmware data in hexadecimal or equivalent format, provided this copyright notice is accompanying it.",
+      "license_url": "https://gitlab.com/kernel-firmware/linux-firmware/-/blob/20241110/WHENCE",
+      "source": "https://github.com/immortalwrt/immortalwrt",
+      "source_path": "package/firmware/linux-firmware/broadcom.mk",
+      "upstream_source": "https://gitlab.com/kernel-firmware/linux-firmware/-/tree/20241110/bnx2",
+      "version_pattern": "20241110-*",
+      "packages": [
+        "bnx2-firmware"
+      ]
+    },
+    {
+      "name": "Intel i915 firmware",
+      "license": "LicenseRef-Intel-i915-Firmware",
+      "license_text": "Copyright (c) 2015, Intel Corporation.\nAll rights reserved.\n\nRedistribution.  Redistribution and use in binary form, without\nmodification, are permitted provided that the following conditions are\nmet:\n\n* Redistributions must reproduce the above copyright notice and the\n  following disclaimer in the documentation and/or other materials\n  provided with the distribution.\n* Neither the name of Intel Corporation nor the names of its suppliers\n  may be used to endorse or promote products derived from this software\n  without specific prior written permission.\n* No reverse engineering, decompilation, or disassembly of this software\n  is permitted.\n\nLimited patent license.  Intel Corporation grants a world-wide,\nroyalty-free, non-exclusive license under patents it now or hereafter\nowns or controls to make, have made, use, import, offer to sell and\nsell (\"Utilize\") this software, but solely to the extent that any\nsuch patent is necessary to Utilize the software alone, or in\ncombination with an operating system licensed under an approved Open\nSource license as listed by the Open Source Initiative at\nhttp://opensource.org/licenses.  The patent license shall not apply to\nany other combinations which include this software.  No hardware per\nse is licensed hereunder.\n\nDISCLAIMER.  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND\nCONTRIBUTORS \"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,\nBUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND\nFITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE\nCOPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,\nINCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,\nBUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS\nOF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND\nON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR\nTORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE\nUSE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH\nDAMAGE.\n",
+      "license_url": "https://gitlab.com/kernel-firmware/linux-firmware/-/blob/20241110/LICENSE.i915",
+      "source": "https://github.com/immortalwrt/immortalwrt",
+      "source_path": "package/firmware/linux-firmware/intel.mk",
+      "upstream_source": "https://gitlab.com/kernel-firmware/linux-firmware/-/tree/20241110/i915",
+      "version_pattern": "20241110-*",
+      "packages": [
+        "i915-firmware-dmc"
+      ]
+    },
+    {
+      "name": "LuCI Vlmcsd",
+      "license": "Apache-2.0",
+      "source": "https://github.com/immortalwrt/luci",
+      "source_path": "applications/luci-app-vlmcsd",
+      "packages": [
+        "luci-app-vlmcsd"
+      ]
+    },
+    {
+      "name": "LuCI Zerotier",
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/immortalwrt/luci",
+      "source_path": "applications/luci-app-zerotier",
+      "packages": [
+        "luci-app-zerotier"
+      ]
+    },
+    {
+      "name": "LuCI Argon theme",
+      "license": "Apache-2.0",
+      "source": "https://github.com/immortalwrt/luci",
+      "source_path": "themes/luci-theme-argon",
+      "packages": [
+        "luci-theme-argon"
+      ]
+    },
+    {
       "name": "OpenClash",
       "license": "MIT",
       "source": "https://github.com/vernesong/OpenClash",
