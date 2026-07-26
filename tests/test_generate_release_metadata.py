@@ -159,6 +159,43 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
         names = {package["name"] for package in document["packages"]}
         self.assertEqual(names, {"luci", "daed"})
 
+    def test_exact_index_source_maps_base_feed_to_core_package_tree(self) -> None:
+        core_source = f"https://github.com/immortalwrt/immortalwrt/tree/{'a' * 40}"
+        luci_source = f"https://github.com/immortalwrt/luci/tree/{'b' * 40}"
+        source_refs = {
+            "immortalwrt": {"source": core_source},
+            "feeds": {"luci": {"source": luci_source}},
+        }
+        self.assertEqual(
+            metadata.exact_index_source(
+                {"source_path": "feeds/base/base-files"},
+                source_refs,
+            ),
+            f"{core_source}/package/base-files",
+        )
+        self.assertEqual(
+            metadata.exact_index_source(
+                {"source_path": "feeds/luci/applications/luci-app-firewall"},
+                source_refs,
+            ),
+            f"{luci_source}/applications/luci-app-firewall",
+        )
+        for invalid_path in (
+            "/feeds/base/base-files",
+            "feeds/base/../../foo",
+            "feeds/base/./foo",
+            "feeds/base",
+            "feeds/base/",
+            "feeds/base//x",
+            "feeds\\base\\x",
+        ):
+            with self.subTest(source_path=invalid_path):
+                with self.assertRaisesRegex(ValueError, "source path"):
+                    metadata.exact_index_source(
+                        {"source_path": invalid_path},
+                        source_refs,
+                    )
+
     def test_conflicting_unused_index_records_only_fail_when_package_is_installed(self) -> None:
         registry = {"components": []}
         candidates = [

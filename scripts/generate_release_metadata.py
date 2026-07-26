@@ -82,14 +82,28 @@ def exact_component_source(component: dict[str, object], source_refs: dict[str, 
 
 
 def exact_index_source(record: dict[str, object], source_refs: dict[str, object]) -> str:
-    source_path = str(record.get("source_path", "")).strip("/")
-    if not source_path:
+    source_path = str(record.get("source_path", "")).strip()
+    if (
+        not source_path
+        or source_path.startswith("/")
+        or source_path.endswith("/")
+        or "\\" in source_path
+    ):
         raise ValueError(f"package index record has no source path: {record}")
     parts = source_path.split("/")
-    if len(parts) >= 3 and parts[0] == "feeds":
-        feed = source_refs.get("feeds", {}).get(parts[1])
-        base = str(feed.get("source", "")) if isinstance(feed, dict) else ""
-        relative = "/".join(parts[2:])
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"package index record has invalid source path: {source_path}")
+    if parts[0] == "feeds":
+        if len(parts) < 3:
+            raise ValueError(f"package index record has incomplete feed source path: {source_path}")
+        if parts[1] == "base":
+            core = source_refs.get("immortalwrt")
+            base = str(core.get("source", "")) if isinstance(core, dict) else ""
+            relative = f"package/{'/'.join(parts[2:])}"
+        else:
+            feed = source_refs.get("feeds", {}).get(parts[1])
+            base = str(feed.get("source", "")) if isinstance(feed, dict) else ""
+            relative = "/".join(parts[2:])
     else:
         core = source_refs.get("immortalwrt")
         base = str(core.get("source", "")) if isinstance(core, dict) else ""
