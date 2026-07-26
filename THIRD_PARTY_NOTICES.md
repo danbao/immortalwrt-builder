@@ -7,6 +7,8 @@ Primary upstream projects include:
 | Component | Source | Declared license |
 | --- | --- | --- |
 | ImmortalWrt | https://github.com/immortalwrt/immortalwrt | GPL-2.0 build environment; packages vary |
+| Broadcom bnx2 firmware | https://gitlab.com/kernel-firmware/linux-firmware/-/tree/20241110/bnx2 | Broadcom redistribution notice in `WHENCE` |
+| Intel i915 firmware | https://gitlab.com/kernel-firmware/linux-firmware/-/tree/20241110/i915 | Intel binary firmware license in `LICENSE.i915` |
 | OpenClash | https://github.com/vernesong/OpenClash | MIT |
 | OpenWrt Nikki | https://github.com/nikkinikki-org/OpenWrt-nikki | GPL-3.0 |
 | PassWall 2 | https://github.com/Openwrt-Passwall/openwrt-passwall2 | GPL-3.0 |
@@ -19,3 +21,5 @@ This list is not a replacement for the package-level notices. Every Release incl
 The pinned archives, this repository's complete build scripts, and the recorded ImageBuilder/feed revisions are the documented network source-acquisition method for each published build. Recipients must follow the license terms of each component when redistributing firmware; the repository's MIT license does not relicense firmware components.
 
 Some third-party feeds do not publish a cryptographically verifiable package-to-source-commit attestation. In those cases the build records an immutable source snapshot as `artifact_source_relation: unverified-upstream`; this is an explicit residual-risk disclosure, not a claim that the snapshot is proven to be the exact source used by upstream.
+
+The reviewed bnx2 and i915 notices above apply to linux-firmware version `20241110`. The metadata generator requires the corresponding installed package versions to match `20241110-*`; a future ImageBuilder update is blocked until its firmware source and license records are reviewed and updated.

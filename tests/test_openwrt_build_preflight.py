@@ -20,6 +20,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         package_file = Path(__file__).resolve().parents[1] / "config" / "openwrt-packages-daed.txt"
         packages = set(preflight.read_packages(package_file))
         self.assertIn("luci-app-daede", packages)
+        self.assertIn("-shellsync", packages)
         self.assertIn("daed", packages)
         self.assertIn("luci-app-mosdns", packages)
         self.assertNotIn("luci-app-passwall2", packages)
@@ -80,6 +81,68 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             preflight.parse_feeds_buildinfo(
                 "src-git packages https://github.com/immortalwrt/packages.git\n"
             )
+
+    def test_resolve_source_refs_uses_build_commit_and_pinned_feed_refs(self) -> None:
+        build_commit = "a" * 40
+        luci_commit = "b" * 40
+        external_feed_commit = "c" * 40
+        components = {
+            "components": [
+                {
+                    "name": "core",
+                    "source": "https://github.com/immortalwrt/immortalwrt",
+                },
+                {
+                    "name": "luci",
+                    "source": "https://github.com/immortalwrt/luci",
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            components_path = tmp / "components.json"
+            provenance_path = tmp / "provenance.json"
+            feed_file = tmp / "feeds.tsv"
+            components_path.write_text(json.dumps(components), encoding="utf-8")
+            provenance_path.write_text('{"records": []}', encoding="utf-8")
+            feed_file.write_text(
+                "external\thttps://feed.example.test\ttrue\tallow-untrusted\t"
+                "https://github.com/example/external-feed\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(
+                preflight,
+                "github_api_json",
+                side_effect=[
+                    {"sha": build_commit},
+                    {"sha": external_feed_commit},
+                ],
+            ) as github_api:
+                result = preflight.resolve_source_refs(
+                    components_path=components_path,
+                    feed_file=feed_file,
+                    provenance_path=provenance_path,
+                    feeds_buildinfo=(
+                        "src-git luci "
+                        f"https://github.com/immortalwrt/luci.git^{luci_commit}\n"
+                    ),
+                    immortalwrt_commit=build_commit[:12],
+                    timeout=1,
+                    retries=1,
+                )
+
+            refs = result["components"]
+            self.assertEqual(
+                refs["https://github.com/immortalwrt/immortalwrt"]["ref"],
+                build_commit,
+            )
+            self.assertEqual(
+                refs["https://github.com/immortalwrt/luci"]["ref"],
+                luci_commit,
+            )
+            self.assertEqual(result["feeds"]["external"]["commit"], external_feed_commit)
+            self.assertEqual(github_api.call_count, 2)
 
     def test_select_release_asset_requires_exactly_one_match(self) -> None:
         assets = [{"name": "luci-app-demo_1_all.ipk"}, {"name": "demo.tar.gz"}]

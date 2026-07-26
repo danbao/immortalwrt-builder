@@ -53,6 +53,47 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "license"):
                 metadata.load_components(config)
 
+            config.write_text(
+                json.dumps(
+                    {
+                        "components": [{
+                            "name": "broken path",
+                            "license": "MIT",
+                            "source": "https://example.test",
+                            "source_path": "../outside",
+                            "packages": ["*"],
+                        }],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "source_path"):
+                metadata.load_components(config)
+
+            for invalid_component in (
+                {
+                    "name": "absolute path",
+                    "license": "MIT",
+                    "source": "https://example.test",
+                    "source_path": "/absolute",
+                    "packages": ["*"],
+                },
+                {
+                    "name": "insecure upstream",
+                    "license": "MIT",
+                    "source": "https://example.test",
+                    "upstream_source": "http://upstream.example.test",
+                    "packages": ["*"],
+                },
+            ):
+                config.write_text(
+                    json.dumps({"components": [invalid_component]}),
+                    encoding="utf-8",
+                )
+                with self.subTest(component=invalid_component["name"]):
+                    with self.assertRaisesRegex(ValueError, "source_path|upstream_source"):
+                        metadata.load_components(config)
+
     def test_component_for_package_uses_override_then_default(self) -> None:
         registry = {
             "components": [
@@ -156,6 +197,55 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 registry,
                 {("demo", "1"): candidates},
                 source_refs,
+                namespace="https://example.test/spdx",
+            )
+
+    def test_license_ref_requires_and_emits_extracted_text(self) -> None:
+        source = "https://github.com/example/firmware"
+        component = {
+            "name": "Firmware",
+            "license": "LicenseRef-Firmware",
+            "license_text": "Redistribution is permitted with this notice.",
+            "license_url": "https://example.test/LICENSE",
+            "source": source,
+            "source_path": "firmware/demo",
+            "upstream_source": "https://upstream.example.test/tree/1",
+            "version_pattern": "1.*",
+            "packages": ["firmware"],
+        }
+        document = metadata.generate_spdx(
+            {"firmware": "1.0"},
+            {"components": [component]},
+            {},
+            {"components": {source: {"source": f"{source}/tree/{'a' * 40}"}}},
+            namespace="https://example.test/spdx",
+        )
+        extracted = document["hasExtractedLicensingInfos"][0]
+        self.assertEqual(extracted["licenseId"], "LicenseRef-Firmware")
+        self.assertEqual(extracted["extractedText"], component["license_text"])
+        self.assertEqual(
+            document["packages"][0]["downloadLocation"],
+            f"{source}/tree/{'a' * 40}/firmware/demo",
+        )
+        self.assertIn("upstream source:", document["packages"][0]["comment"])
+
+        del component["license_text"]
+        with self.assertRaisesRegex(ValueError, "missing extracted license text"):
+            metadata.generate_spdx(
+                {"firmware": "1.0"},
+                {"components": [component]},
+                {},
+                {"components": {source: {"source": f"{source}/tree/{'a' * 40}"}}},
+                namespace="https://example.test/spdx",
+            )
+
+        component["license_text"] = "Redistribution is permitted with this notice."
+        with self.assertRaisesRegex(ValueError, "not covered by reviewed metadata"):
+            metadata.generate_spdx(
+                {"firmware": "2.0"},
+                {"components": [component]},
+                {},
+                {"components": {source: {"source": f"{source}/tree/{'a' * 40}"}}},
                 namespace="https://example.test/spdx",
             )
 
