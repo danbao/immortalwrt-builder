@@ -101,27 +101,23 @@ def resolved_component_registry(
     return {"schema_version": registry.get("schema_version", 1), "components": components}
 
 
-def load_package_index(path: Path) -> dict[tuple[str, str], dict[str, object]]:
+def load_package_index(path: Path) -> dict[tuple[str, str], list[dict[str, object]]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    result: dict[tuple[str, str], dict[str, object]] = {}
+    result: dict[tuple[str, str], list[dict[str, object]]] = {}
     for record in payload.get("packages", []):
         key = (str(record.get("package", "")), str(record.get("version", "")))
         if not all(key) or not record.get("download_url"):
             raise ValueError(f"incomplete package index record: {record}")
-        existing = result.get(key)
-        if existing and (
-            existing["license"] != record["license"]
-            or existing["source_path"] != record["source_path"]
-        ):
-            raise ValueError(f"conflicting package metadata: {key[0]} {key[1]}")
-        result[key] = record
+        candidates = result.setdefault(key, [])
+        if record not in candidates:
+            candidates.append(record)
     return result
 
 
 def generate_spdx(
     packages: dict[str, str],
     registry: dict[str, object],
-    package_index: dict[tuple[str, str], dict[str, object]],
+    package_index: dict[tuple[str, str], list[dict[str, object]]],
     source_refs: dict[str, object],
     *,
     namespace: str,
@@ -134,8 +130,14 @@ def generate_spdx(
             download_location = exact_component_source(component, source_refs)
             source_comment = f"source family: {component['name']}"
         else:
-            record = package_index.get((name, version))
-            if record is None or not record.get("license") or not record.get("source_path"):
+            candidates = package_index.get((name, version), [])
+            if len(candidates) != 1:
+                raise ValueError(
+                    f"missing unique exact package metadata for package: "
+                    f"{name} {version} ({len(candidates)} candidates)"
+                )
+            record = candidates[0]
+            if not record.get("license") or not record.get("source_path"):
                 raise ValueError(f"missing exact license/source metadata for package: {name} {version}")
             license_id = record["license"]
             download_location = exact_index_source(record, source_refs)
