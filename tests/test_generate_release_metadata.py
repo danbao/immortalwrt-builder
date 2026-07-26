@@ -86,16 +86,16 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
     def test_generate_spdx_contains_both_flavors(self) -> None:
         registry = {"components": []}
         package_index = {
-            ("luci", "1.0"): {
+            ("luci", "1.0"): [{
                 "license": "Apache-2.0",
                 "source_path": "feeds/luci/luci",
                 "download_url": "https://downloads.example/luci.ipk",
-            },
-            ("daed", "2.0"): {
+            }],
+            ("daed", "2.0"): [{
                 "license": "AGPL-3.0-only",
                 "source_path": "feeds/packages/daed",
                 "download_url": "https://downloads.example/daed.ipk",
-            },
+            }],
         }
         source_refs = {
             "immortalwrt": {
@@ -117,6 +117,47 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(document["spdxVersion"], "SPDX-2.3")
         names = {package["name"] for package in document["packages"]}
         self.assertEqual(names, {"luci", "daed"})
+
+    def test_conflicting_unused_index_records_only_fail_when_package_is_installed(self) -> None:
+        registry = {"components": []}
+        candidates = [
+            {
+                "license": "MIT",
+                "source_path": "feeds/packages/demo",
+                "download_url": "https://one.example/demo.ipk",
+            },
+            {
+                "license": "MIT",
+                "source_path": "feeds/custom/demo",
+                "download_url": "https://two.example/demo.ipk",
+            },
+        ]
+        source_refs = {
+            "immortalwrt": {"source": f"https://github.com/example/core/tree/{'a' * 40}"},
+            "feeds": {
+                "packages": {"source": f"https://github.com/example/packages/tree/{'b' * 40}"},
+                "custom": {"source": f"https://github.com/example/custom/tree/{'c' * 40}"},
+            },
+            "components": {},
+        }
+        metadata.generate_spdx(
+            {"other": "1"},
+            registry,
+            {
+                ("demo", "1"): candidates,
+                ("other", "1"): [candidates[0]],
+            },
+            source_refs,
+            namespace="https://example.test/spdx",
+        )
+        with self.assertRaisesRegex(ValueError, "missing unique exact package metadata"):
+            metadata.generate_spdx(
+                {"demo": "1"},
+                registry,
+                {("demo", "1"): candidates},
+                source_refs,
+                namespace="https://example.test/spdx",
+            )
 
 
 if __name__ == "__main__":
