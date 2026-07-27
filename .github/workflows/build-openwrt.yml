@@ -13,8 +13,8 @@ on:
         default: false
         type: boolean
   schedule:
-    # Checked every Monday 02:00 Asia/Shanghai; a fixed epoch enforces an exact 14-day cadence.
-    - cron: "0 18 * * 0"
+    # Run daily at 02:00 Asia/Shanghai (18:00 UTC on the previous day).
+    - cron: "0 18 * * *"
 
 permissions:
   contents: read
@@ -27,35 +27,7 @@ env:
   IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '24.10.6' }}
 
 jobs:
-  schedule:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      should_build: ${{ steps.check.outputs.should_build }}
-    steps:
-      - name: Check biweekly schedule
-        id: check
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            echo "should_build=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          epoch="$(TZ=Asia/Shanghai date -d '2026-01-05 00:00:00' +%s)"
-          now="$(TZ=Asia/Shanghai date +%s)"
-          elapsed_days="$(((now - epoch) / 86400))"
-          if [ "$((elapsed_days % 14))" -eq 0 ]; then
-            echo "should_build=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "should_build=false" >> "${GITHUB_OUTPUT}"
-          fi
-
   build:
-    needs: schedule
-    if: needs.schedule.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

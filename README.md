@@ -9,7 +9,7 @@
 
 ## 构建计划
 
-GitHub Actions 每周一北京时间 02:00 检查一次，以 `2026-01-05` 为固定纪元按 14 天间隔执行构建，跨年也不会受 ISO 第 53 周影响。手动运行默认只生成短期 Actions artifact；只有明确选择 `publish_release=true` 才发布 Release。
+GitHub Actions 每天北京时间 02:00 自动执行构建。手动运行默认只生成短期 Actions artifact；只有明确选择 `publish_release=true` 才发布 Release。
 
 定时构建通过全部检查后会自动发布。相同 flavor 和镜像 SHA 已存在于受管 Release 时不会重复发布。
 
