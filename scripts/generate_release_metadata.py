@@ -47,6 +47,9 @@ def validate_component(component: dict[str, object], label: str) -> None:
     upstream_source = str(component.get("upstream_source", ""))
     if upstream_source and not upstream_source.startswith("https://"):
         raise ValueError(f"{label} upstream_source must use https: {upstream_source}")
+    reviewed_source_ref = str(component.get("reviewed_source_ref", ""))
+    if reviewed_source_ref and not fnmatch.fnmatch(reviewed_source_ref, "[0-9a-f]" * 40):
+        raise ValueError(f"{label} has invalid reviewed_source_ref: {reviewed_source_ref}")
 
 
 def load_components(path: Path) -> dict[str, object]:
@@ -75,8 +78,15 @@ def exact_component_source(component: dict[str, object], source_refs: dict[str, 
     source = str(component["source"])
     record = source_refs.get("components", {}).get(source)
     exact_source = str(record.get("source", "")) if isinstance(record, dict) else ""
-    if not exact_source.startswith(f"{source}/tree/"):
+    actual_source_ref = str(record.get("ref", "")) if isinstance(record, dict) else ""
+    if not actual_source_ref or exact_source != f"{source}/tree/{actual_source_ref}":
         raise ValueError(f"missing exact source ref for component: {component['name']}")
+    reviewed_source_ref = str(component.get("reviewed_source_ref", ""))
+    if reviewed_source_ref and actual_source_ref != reviewed_source_ref:
+        raise ValueError(
+            f"component source ref is not covered by reviewed metadata: "
+            f"{component['name']} {actual_source_ref} (expected {reviewed_source_ref})"
+        )
     source_path = str(component.get("source_path", "")).strip("/")
     return f"{exact_source.rstrip('/')}/{source_path}" if source_path else exact_source
 

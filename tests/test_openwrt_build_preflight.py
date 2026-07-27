@@ -20,7 +20,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         package_file = Path(__file__).resolve().parents[1] / "config" / "openwrt-packages-daed.txt"
         packages = set(preflight.read_packages(package_file))
         self.assertIn("luci-app-daede", packages)
-        self.assertIn("-shellsync", packages)
+        self.assertNotIn("-shellsync", packages)
         self.assertIn("daed", packages)
         self.assertIn("luci-app-mosdns", packages)
         self.assertNotIn("luci-app-passwall2", packages)

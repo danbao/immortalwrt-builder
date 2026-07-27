@@ -45,7 +45,6 @@ collectd-mod-uptime
 collectd-mod-iptables
 
 # Diagnostics and filesystems
--shellsync
 ip-full
 ca-bundle
 curl

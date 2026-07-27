@@ -21,6 +21,19 @@
       ]
     },
     {
+      "name": "ImmortalWrt shellsync",
+      "license": "GPL-2.0-only",
+      "license_basis": "ImmortalWrt COPYING declares GPL-2.0-only and states that all contributions are subject to it; shellsync has no separate license declaration.",
+      "license_url": "https://github.com/immortalwrt/immortalwrt/blob/cf234f8de6d5a7a3fa38fa0f7a936a0d8b15856c/COPYING",
+      "reviewed_source_ref": "cf234f8de6d5a7a3fa38fa0f7a936a0d8b15856c",
+      "source": "https://github.com/immortalwrt/immortalwrt",
+      "source_path": "package/network/services/shellsync",
+      "version_pattern": "0.2-*",
+      "packages": [
+        "shellsync"
+      ]
+    },
+    {
       "name": "Linux kernel",
       "license": "GPL-2.0-only",
       "source": "https://github.com/immortalwrt/immortalwrt",
