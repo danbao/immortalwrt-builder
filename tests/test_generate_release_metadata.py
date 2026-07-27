@@ -94,6 +94,23 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "source_path|upstream_source"):
                         metadata.load_components(config)
 
+            config.write_text(
+                json.dumps(
+                    {
+                        "components": [{
+                            "name": "invalid reviewed ref",
+                            "license": "MIT",
+                            "source": "https://example.test",
+                            "reviewed_source_ref": "not-a-commit",
+                            "packages": ["*"],
+                        }],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "reviewed_source_ref"):
+                metadata.load_components(config)
+
     def test_component_for_package_uses_override_then_default(self) -> None:
         registry = {
             "components": [
@@ -115,7 +132,10 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 registry["components"][0],
                 {
                     "components": {
-                        registry["components"][0]["source"]: {"source": exact_source},
+                        registry["components"][0]["source"]: {
+                            "ref": "v1.2.3",
+                            "source": exact_source,
+                        },
                     }
                 },
             ),
@@ -123,6 +143,64 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "missing exact source ref"):
             metadata.exact_component_source(registry["components"][0], {"components": {}})
+
+    def test_shellsync_override_is_version_bounded_and_has_license_evidence(self) -> None:
+        config = (
+            Path(__file__).resolve().parents[1]
+            / "config"
+            / "third-party-components.json"
+        )
+        registry = metadata.load_components(config)
+        component = metadata.component_for_package("shellsync", registry)
+        self.assertIsNotNone(component)
+        self.assertEqual(component["license"], "GPL-2.0-only")
+        self.assertEqual(component["version_pattern"], "0.2-*")
+        self.assertIn("/COPYING", component["license_url"])
+        self.assertIn("all contributions", component["license_basis"])
+        reviewed_ref = component["reviewed_source_ref"]
+        source = component["source"]
+        source_refs = {
+            "components": {
+                source: {
+                    "ref": reviewed_ref,
+                    "source": f"{source}/tree/{reviewed_ref}",
+                }
+            }
+        }
+        document = metadata.generate_spdx(
+            {"shellsync": "0.2-r2"},
+            registry,
+            {},
+            source_refs,
+            namespace="https://example.test/spdx",
+        )
+        self.assertTrue(
+            document["packages"][0]["downloadLocation"].endswith(
+                "/package/network/services/shellsync"
+            )
+        )
+        source_refs["components"][source]["ref"] = "a" * 40
+        source_refs["components"][source]["source"] = f"{source}/tree/{'a' * 40}"
+        with self.assertRaisesRegex(ValueError, "not covered by reviewed metadata"):
+            metadata.generate_spdx(
+                {"shellsync": "0.2-r2"},
+                registry,
+                {},
+                source_refs,
+                namespace="https://example.test/spdx",
+            )
+        source_refs["components"][source] = {
+            "ref": reviewed_ref,
+            "source": f"{source}/tree/{'b' * 40}",
+        }
+        with self.assertRaisesRegex(ValueError, "missing exact source ref"):
+            metadata.generate_spdx(
+                {"shellsync": "0.2-r2"},
+                registry,
+                {},
+                source_refs,
+                namespace="https://example.test/spdx",
+            )
 
     def test_generate_spdx_contains_both_flavors(self) -> None:
         registry = {"components": []}
@@ -254,7 +332,14 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
             {"firmware": "1.0"},
             {"components": [component]},
             {},
-            {"components": {source: {"source": f"{source}/tree/{'a' * 40}"}}},
+            {
+                "components": {
+                    source: {
+                        "ref": "a" * 40,
+                        "source": f"{source}/tree/{'a' * 40}",
+                    }
+                }
+            },
             namespace="https://example.test/spdx",
         )
         extracted = document["hasExtractedLicensingInfos"][0]
@@ -272,7 +357,14 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 {"firmware": "1.0"},
                 {"components": [component]},
                 {},
-                {"components": {source: {"source": f"{source}/tree/{'a' * 40}"}}},
+                {
+                    "components": {
+                        source: {
+                            "ref": "a" * 40,
+                            "source": f"{source}/tree/{'a' * 40}",
+                        }
+                    }
+                },
                 namespace="https://example.test/spdx",
             )
 
@@ -282,7 +374,14 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 {"firmware": "2.0"},
                 {"components": [component]},
                 {},
-                {"components": {source: {"source": f"{source}/tree/{'a' * 40}"}}},
+                {
+                    "components": {
+                        source: {
+                            "ref": "a" * 40,
+                            "source": f"{source}/tree/{'a' * 40}",
+                        }
+                    }
+                },
                 namespace="https://example.test/spdx",
             )
 
