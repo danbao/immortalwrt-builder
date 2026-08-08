@@ -570,6 +570,7 @@ def collect_apk_package_index(
             str(apk_bin.resolve()),
             "--root",
             root_dir,
+            "--usermode",
             "--keys-dir",
             str(keys_dir.resolve()),
             "--repositories-file",
