@@ -3,10 +3,6 @@ name: Build ImmortalWrt
 on:
   workflow_dispatch:
     inputs:
-      ib_version:
-        description: ImmortalWrt ImageBuilder version
-        required: true
-        default: "25.12.1"
       publish_release:
         description: Publish GitHub Releases after all checks pass
         required: true
@@ -24,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '25.12.1' }}
+  IB_VERSION: "25.12.1"
   IB_TARGET: x86/generic
   IB_PACKAGE_ARCH: i386_pentium4
   OPENWRT_PACKAGE_SERIES: "25.12"
