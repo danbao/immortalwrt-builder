@@ -12,8 +12,10 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -547,6 +549,95 @@ def collect_package_indexes(
         )
 
 
+def collect_apk_package_index(
+    apk_bin: Path,
+    repositories: Path,
+    keys_dir: Path,
+    *,
+    package_index: Path,
+    provenance: Path,
+) -> None:
+    if not apk_bin.is_file() or not repositories.is_file() or not keys_dir.is_dir():
+        raise ValueError("APK metadata inputs are incomplete")
+    with tempfile.TemporaryDirectory(prefix="apk-query-") as root_dir:
+        common_command = [
+            str(apk_bin.resolve()),
+            "--root",
+            root_dir,
+            "--keys-dir",
+            str(keys_dir.resolve()),
+            "--repositories-file",
+            str(repositories.resolve()),
+            "--no-cache",
+        ]
+        environment = os.environ.copy()
+        environment["PATH"] = f"{apk_bin.resolve().parent}:{environment.get('PATH', '')}"
+        subprocess.run(
+            [*common_command, "add", "--initdb"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        command = [
+            *common_command,
+            "query",
+            "--from",
+            "repositories",
+            "--format",
+            "json",
+            "--fields",
+            "name,version,license,download-url,file-size,origin",
+            "*",
+        ]
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+    payload = json.loads(result.stdout)
+    packages = payload.get("packages", []) if isinstance(payload, dict) else payload
+    if not isinstance(packages, list) or not packages:
+        raise ValueError("APK repository query returned no packages")
+    records: list[dict[str, object]] = []
+    for package in packages:
+        if not isinstance(package, dict):
+            raise ValueError("APK repository query returned an invalid package record")
+        name = str(package.get("name", ""))
+        version = str(package.get("version", ""))
+        license_id = str(package.get("license", ""))
+        download_url_value = package.get("download-url", "")
+        if isinstance(download_url_value, list):
+            download_url_value = download_url_value[0] if len(download_url_value) == 1 else ""
+        download_url_value = str(download_url_value)
+        if not all((name, version, download_url_value)):
+            raise ValueError(f"APK package metadata is incomplete: {name or '<unknown>'}")
+        if not download_url_value.startswith("https://"):
+            raise ValueError(f"APK package metadata uses a non-HTTPS URL: {name}")
+        records.append(
+            {
+                "package": name,
+                "version": version,
+                "license": license_id,
+                "source_path": str(package.get("origin", name)),
+                "download_url": download_url_value,
+                "size": int(package.get("file-size", 0)),
+            }
+        )
+    write_package_index(package_index, records)
+    append_provenance_record(
+        provenance,
+        {
+            "kind": "imagebuilder-apk-package-index",
+            "repositories_sha256": sha256_file(repositories),
+            "package_count": len(records),
+            "verification_status": "verified-by-imagebuilder-apk-signing-keys",
+        },
+    )
+
+
 def parse_feeds_buildinfo(payload: str) -> dict[str, dict[str, str]]:
     feeds: dict[str, dict[str, str]] = {}
     for line in payload.splitlines():
@@ -791,6 +882,18 @@ def cmd_collect_package_indexes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_collect_apk_package_index(args: argparse.Namespace) -> int:
+    collect_apk_package_index(
+        args.apk_bin,
+        args.repositories,
+        args.keys_dir,
+        package_index=args.package_index,
+        provenance=args.provenance,
+    )
+    print(f"collected signed APK metadata: {args.package_index}")
+    return 0
+
+
 def cmd_resolve_source_refs(args: argparse.Namespace) -> int:
     feeds_buildinfo = fetch_bytes(
         args.feeds_buildinfo_url,
@@ -931,7 +1034,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     imagebuilder_info = subparsers.add_parser("imagebuilder-info", help="resolve and verify ImageBuilder metadata")
     imagebuilder_info.add_argument("--version", required=True)
-    imagebuilder_info.add_argument("--target", default="x86/64")
+    imagebuilder_info.add_argument("--target", default="x86/generic")
     imagebuilder_info.add_argument("--github-env", type=Path)
     add_common_network_args(imagebuilder_info)
     imagebuilder_info.set_defaults(func=cmd_imagebuilder_info)
@@ -960,6 +1063,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     collect_indexes.add_argument("--provenance", type=Path, required=True)
     add_common_network_args(collect_indexes)
     collect_indexes.set_defaults(func=cmd_collect_package_indexes)
+
+    collect_apk = subparsers.add_parser(
+        "collect-apk-package-index",
+        help="collect signed package metadata from ImageBuilder APK repositories",
+    )
+    collect_apk.add_argument("--apk-bin", type=Path, required=True)
+    collect_apk.add_argument("--repositories", type=Path, required=True)
+    collect_apk.add_argument("--keys-dir", type=Path, required=True)
+    collect_apk.add_argument("--package-index", type=Path, required=True)
+    collect_apk.add_argument("--provenance", type=Path, required=True)
+    collect_apk.set_defaults(func=cmd_collect_apk_package_index)
 
     source_refs = subparsers.add_parser(
         "resolve-source-refs",

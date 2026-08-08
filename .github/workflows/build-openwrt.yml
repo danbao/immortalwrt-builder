@@ -6,7 +6,7 @@ on:
       ib_version:
         description: ImmortalWrt ImageBuilder version
         required: true
-        default: "24.10.6"
+        default: "25.12.1"
       publish_release:
         description: Publish GitHub Releases after all checks pass
         required: true
@@ -24,7 +24,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '24.10.6' }}
+  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '25.12.1' }}
+  IB_TARGET: x86/generic
+  IB_PACKAGE_ARCH: i386_pentium4
+  OPENWRT_PACKAGE_SERIES: "25.12"
 
 jobs:
   build:
@@ -49,7 +52,7 @@ jobs:
         run: |
           python3 scripts/openwrt_build_preflight.py imagebuilder-info \
             --version "${IB_VERSION}" \
-            --target "x86/64" \
+            --target "${IB_TARGET}" \
             --github-env "${GITHUB_ENV}" \
             --retries 8 \
             --timeout 30
@@ -62,7 +65,7 @@ jobs:
             --retries 8 \
             --timeout 300
           tar --zstd -xf "${IB_ARCHIVE}"
-          mv "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64" imagebuilder
+          mv "immortalwrt-imagebuilder-${IB_VERSION}-${IB_TARGET//\//-}.Linux-x86_64" imagebuilder
 
       - name: Collect release metadata
         run: |
@@ -89,24 +92,6 @@ jobs:
             -e 's/^CONFIG_VHDX_IMAGES=y/# CONFIG_VHDX_IMAGES is not set/' \
             .config
 
-      - name: Mirror third-party feeds without disabling official signatures
-        run: |
-          mkdir -p dist/metadata
-          mkdir -p imagebuilder/packages
-          python3 scripts/openwrt_build_preflight.py mirror-feeds \
-            --feed-file config/third-party-feeds.tsv \
-            --dir imagebuilder/packages \
-            --package-index dist/metadata/package-index.json \
-            --provenance dist/metadata/upstream-provenance.json \
-            --retries 3 \
-            --timeout 120
-          python3 scripts/openwrt_build_preflight.py collect-package-indexes \
-            --repositories-conf imagebuilder/repositories.conf \
-            --package-index dist/metadata/package-index.json \
-            --provenance dist/metadata/upstream-provenance.json \
-            --retries 3 \
-            --timeout 60
-
       - name: Download inspected release assets
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -123,14 +108,34 @@ jobs:
               --retries 8 \
               --timeout "$4"
           }
-          download_asset Openwrt-Passwall/openwrt-passwall2 'luci-app-passwall2_*_all.ipk' packages 60
-          download_asset asvow/luci-app-tailscale 'luci-app-tailscale_*_all.ipk' packages 60
-          download_asset sbwml/luci-app-mosdns 'x86_64-openwrt-24.10.tar.gz' /tmp/mosdns 120
-          download_asset kenzok8/openwrt-daede 'luci-app-daede_*_all.ipk' packages 60
+          mkdir -p "${GITHUB_WORKSPACE}/dist/metadata"
+          download_asset Openwrt-Passwall/openwrt-passwall2 'luci-app-passwall2-*.apk' packages 60
+          download_asset asvow/luci-app-tailscale 'luci-app-tailscale-*.apk' packages 60
+          download_asset vernesong/OpenClash 'luci-app-openclash-*.apk' packages 60
+          mosdns_archive="${IB_PACKAGE_ARCH}-openwrt-${OPENWRT_PACKAGE_SERIES}.tar.gz"
+          nikki_archive="nikki_${IB_PACKAGE_ARCH}-openwrt-${OPENWRT_PACKAGE_SERIES}.tar.gz"
+          download_asset sbwml/luci-app-mosdns "${mosdns_archive}" /tmp/mosdns 120
+          download_asset nikkinikki-org/OpenWrt-nikki "${nikki_archive}" /tmp/nikki 120
+          download_asset kenzok8/openwrt-daede "luci-app-daede-*-${IB_PACKAGE_ARCH}.apk" packages 60
+          download_asset kenzok8/openwrt-daede "daed-*-${IB_PACKAGE_ARCH}.apk" packages 120
           python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
-            --archive /tmp/mosdns/x86_64-openwrt-24.10.tar.gz \
+            --archive "/tmp/mosdns/${mosdns_archive}" \
             --target /tmp/mosdns/extract
-          find /tmp/mosdns/extract -type f -name '*.ipk' -print -exec mv -f {} packages/ \;
+          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
+            --archive "/tmp/nikki/${nikki_archive}" \
+            --target /tmp/nikki/extract
+          find /tmp/mosdns/extract -type f -name '*.apk' ! -name 'v2ray-*.apk' \
+            -print -exec mv -f {} packages/ \;
+          find /tmp/nikki/extract -type f -name '*.apk' -print -exec mv -f {} packages/ \;
+
+      - name: Collect signed official APK metadata
+        run: |
+          python3 scripts/openwrt_build_preflight.py collect-apk-package-index \
+            --apk-bin imagebuilder/staging_dir/host/bin/apk \
+            --repositories imagebuilder/repositories \
+            --keys-dir imagebuilder/keys \
+            --package-index dist/metadata/package-index.json \
+            --provenance dist/metadata/upstream-provenance.json
 
       - name: Resolve exact source references
         run: |
@@ -158,11 +163,11 @@ jobs:
             awk '/^[A-Za-z0-9_.+:-]+ - / {print}' "/tmp/${manifest_name}.log" \
               > "${GITHUB_WORKSPACE}/build-out/${manifest_name}"
             test -s "${GITHUB_WORKSPACE}/build-out/${manifest_name}"
-            rm -rf bin/targets/x86/64
+            rm -rf "bin/targets/${IB_TARGET}"
             make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="${packages}"
 
             shopt -s nullglob
-            images=(bin/targets/x86/64/*squashfs-combined-efi.img.gz)
+            images=(bin/targets/"${IB_TARGET}"/*squashfs-combined-efi.img.gz)
             if [ "${#images[@]}" -ne 1 ]; then
               echo "Expected exactly one ${flavor} squashfs EFI image, found ${#images[@]}" >&2
               exit 1
