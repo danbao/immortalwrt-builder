@@ -147,6 +147,14 @@
       "packages": [
         "luci-app-daede"
       ]
+    },
+    {
+      "name": "vmlinux BTF",
+      "license": "GPL-2.0-only",
+      "source": "https://github.com/kenzok8/openwrt-daede",
+      "packages": [
+        "vmlinux-btf"
+      ]
     }
   ]
 }

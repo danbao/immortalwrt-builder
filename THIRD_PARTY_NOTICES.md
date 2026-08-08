@@ -15,6 +15,7 @@ Primary upstream projects include:
 | PassWall 2 | https://github.com/Openwrt-Passwall/openwrt-passwall2 | GPL-3.0 |
 | LuCI MosDNS | https://github.com/sbwml/luci-app-mosdns | GPL-3.0 |
 | OpenWrt daed/daede | https://github.com/kenzok8/openwrt-daede | AGPL-3.0 |
+| vmlinux BTF package | https://github.com/kenzok8/openwrt-daede | GPL-2.0-only |
 
 This list is not a replacement for the package-level notices. Every Release includes the exact package versions, commit- or tag-pinned source locations, downloadable source archive URLs, source paths, and SPDX identifiers generated from the actual build manifest. Missing license or exact source metadata blocks publication.
 
