@@ -494,6 +494,26 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
                     provenance=tmp / "provenance.json",
                 )
 
+            failed_query = preflight.subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="repository rejected"
+            )
+            with mock.patch.object(
+                preflight.subprocess,
+                "run",
+                side_effect=[
+                    preflight.subprocess.CompletedProcess(args=[], returncode=0),
+                    failed_query,
+                ],
+            ), self.assertRaisesRegex(RuntimeError, "repository rejected"):
+                preflight.collect_apk_package_index(
+                    apk_bin,
+                    repositories,
+                    keys_dir,
+                    "i386_pentium4",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                )
+
         with tempfile.TemporaryDirectory() as tmp_s:
             missing = Path(tmp_s)
             with self.assertRaisesRegex(ValueError, "inputs are incomplete"):
