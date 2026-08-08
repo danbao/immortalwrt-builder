@@ -2,10 +2,53 @@
 
 自动构建适用于 x86_64 虚拟化环境的 ImmortalWrt 固件，并发布 raw `.img.gz` 和可导入 ESXi 的 OVA。
 
+当前旁路由迁移流程是先用临时地址灰度运行，再在维护窗口接通第二条 VMware 链路并接管旧机地址。OVA 默认只包含一张 VMXNET3 网卡；第二张网卡需要在 VMware 中手动添加，并连接到旧 VM 第二张网卡所在的 Port Group。
+
 本项目使用 ImmortalWrt ImageBuilder，不从源码完整编译发行版。默认生成两个 flavor：
 
 - `standard`：PassWall 2、OpenClash、Nikki、MosDNS 等常用旁路由组件。
 - `daed`：使用 `dae`/`daed`，不包含与其冲突的透明代理栈。
+
+两个 flavor 都保留 Tailscale 远程访问和 KMS 激活组件，移除未使用的 ZeroTier 与 MiniUPnP，并默认包含 `luci-ssl`。daed 替换场景优先使用 `daed` flavor，别把几套透明代理栈塞进一台机器互相踩 nftables 规则。
+
+## 替换旧旁路由
+
+固件不会包含现场 IP，也不会直接抢占旧机地址。首次启动后先从 VMware 控制台执行一次（把尖括号占位符替换为现场值）：
+
+```sh
+/usr/sbin/bypass-router-configure \
+  '<STAGING_IP>' '<TARGET_IP>' '<GATEWAY_IP>' '<TRUSTED_MANAGEMENT_CIDR>' --confirm
+```
+
+该命令会应用以下无秘密配置：
+
+- LAN 使用临时地址，网关和 DNS 使用主路由地址；目标地址只保存给切换脚本。
+- `eth0` 与 `eth1` 加入启用 STP 的 `br-lan`；旧系统里的接口可能叫 `eth3`，迁移依据是 VMware Port Group，不是 Linux 接口编号。
+- DHCP、DHCPv6、RA 和流量卸载保持关闭。
+- LuCI 在 LAN 地址提供 HTTPS，HTTP 仅重定向；daed 面板只绑定 LAN 地址的 `2023` 端口。SSH、LuCI 和 daed 管理端口仅允许指定可信管理网段访问。
+- 系统日志缓冲区为 1 MiB，匿名磁盘挂载关闭。
+
+推荐切换顺序：
+
+1. 关机导入 OVA，将默认网卡连接到旧 VM 第一张网卡所在的 Port Group。暂时不要添加或接通第二张网卡。
+2. 在 VMware 控制台运行上述初始化命令，然后访问临时地址的 HTTPS 管理页。首次证书是设备自签名证书。
+3. 设置 root 强密码，写入并实际验证 `/etc/dropbear/authorized_keys` 中的 SSH 公钥。
+4. 临时将一台客户端的旁路由、DNS 和代理目标改为临时地址，通过第一张网卡验证 MosDNS 和 daed 的真实流量。
+5. 进入维护窗口，保留 VMware 快照和控制台，先关闭旧机，再为新 VM 添加第二张 VMXNET3 网卡，连接到旧 VM 第二张网卡所在的 Port Group。不要让旧、新两台二层桥同时连接这对 Port Group。
+6. 在新机运行 `/usr/sbin/bypass-router-cutover check`。该检查要求 `br-lan` 至少有两个有载波的端口，而且两个端口在 3 秒采样期内都有流量；无流量时先从两侧各制造一次测试流量再重试。
+7. 确认旧地址不再响应后运行 `/usr/sbin/bypass-router-cutover apply --confirm`。SSH 会断开，随后从目标地址的 HTTPS 管理页重连。
+8. 再次验证客户端 DNS、透明代理、跨 Port Group 流量和回滚路径，稳定后才移除旧 VM。
+9. 公钥登录确认无误后运行 `/usr/sbin/bypass-router-harden`，关闭 root 密码 SSH，并停用 LuCI 明文 HTTP。
+
+`check` 只验证链路、实时流量和进程状态，无法替代第 4 步的真实客户端灰度。`apply` 在发现目标地址仍被占用时会拒绝接管，避免地址冲突。
+
+镜像扩容后出现“backup GPT invalid”时，先创建 VMware 快照并确认控制台可用，再用磁盘工具把备份 GPT 移到磁盘末尾；这是会改分区表的维护操作，不由首次启动脚本自动执行。`sda128` 是 BIOS 引导保留分区，不是数据盘损坏，固件已经关闭 `anon_mount`，不会再把它当 exFAT 自动挂载。
+
+## 当前版本边界
+
+构建目前仍固定在 ImmortalWrt 24.10.6。官方已经把 24.10 标记为旧稳定版，而 25.12.1 是当前稳定版；不过本项目的 MosDNS 预编译资产和部分第三方 feed 仍使用 24.10/opkg 布局，25.12 又已转向 apk，并且 x86 target 布局发生变化。因此这里没有做只改版本号的假升级。
+
+迁移到 25.12 前必须在独立构建中同时验证：ImageBuilder target/profile、MosDNS、daed/daede、Nikki/PassWall feed、包管理器、过滤脚本和 OVA 启动。验证通过后再修改默认构建版本，禁止在现用旁路由上在线跨大版本升级。
 
 ## 构建计划
 
@@ -33,7 +76,7 @@ ImageBuilder 使用 ImmortalWrt 官方 SHA256 校验。GitHub Release 依赖会�
 
 ## 首次启动安全
 
-项目不会注入密码、SSH key、VPN 配置、代理订阅或其他运行时秘密。固件沿用 ImmortalWrt/OpenWrt 的首次启动认证行为：
+项目不会注入密码、SSH key、VPN 配置、代理订阅、daed 凭据或其他运行时秘密，也不会从运行中的路由器导出这些内容。固件沿用 ImmortalWrt/OpenWrt 的首次启动认证行为：
 
 1. 仅在可信 LAN 中首次启动。
 2. 立即设置强 root 密码。
@@ -47,7 +90,25 @@ python3 -m py_compile scripts/*.py
 python3 -m unittest discover -s tests
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 shellcheck files/etc/uci-defaults/99-bypass-router.sh
+shellcheck files/usr/sbin/bypass-router-configure \
+  files/usr/sbin/bypass-router-cutover \
+  files/usr/sbin/bypass-router-harden \
+  files/usr/share/luci-app-daede/daed-filter-sync.sh
 ```
+
+### daed 订阅名称过滤
+
+`daed` 的群组 API 不能直接为整条订阅设置名称排除规则。固件中包含
+`/usr/share/luci-app-daede/daed-filter-sync.sh`，用于更新持久订阅后，把符合条件的节点逐个同步到群组。
+
+例如，将订阅 `codeap` 中名称不含“备用”的节点同步到 `proxy`：
+
+```sh
+/usr/share/luci-app-daede/daed-filter-sync.sh 'codeap' 'proxy' '备用'
+```
+
+脚本会先更新订阅，再生成过滤计划、校验配置并热加载 dae。建议关闭 daed
+内置的订阅定时更新，改由 cron 调用该脚本，避免订阅已更新但群组成员尚未同步的窗口。
 
 本地转换还需要 `qemu-img`。Ubuntu 可安装 `qemu-utils`。
 

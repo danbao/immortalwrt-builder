@@ -1,5 +1,6 @@
 # Core LuCI UI
 luci
+luci-ssl
 luci-i18n-base-zh-cn
 luci-theme-argon
 
@@ -10,11 +11,11 @@ luci-app-openclash
 luci-app-nikki
 luci-i18n-nikki-zh-cn
 mihomo-meta
-luci-app-vlmcsd
+
+# Remote access and Windows/Office activation
 luci-app-tailscale
 tailscale
-luci-app-zerotier
-zerotier
+luci-app-vlmcsd
 
 # Virtualization and network drivers
 kmod-vmxnet3
@@ -26,7 +27,6 @@ kmod-e1000e
 kmod-tcp-bbr
 kmod-tun
 irqbalance
-luci-app-upnp
 kmod-nft-offload
 
 # Statistics

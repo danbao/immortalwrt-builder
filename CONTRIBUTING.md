@@ -8,7 +8,11 @@ Before opening a pull request, run:
 python3 -m py_compile scripts/*.py
 python3 -m unittest discover -s tests
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-shellcheck files/etc/uci-defaults/99-bypass-router.sh
+shellcheck files/etc/uci-defaults/99-bypass-router.sh \
+  files/usr/sbin/bypass-router-configure \
+  files/usr/sbin/bypass-router-cutover \
+  files/usr/sbin/bypass-router-harden \
+  files/usr/share/luci-app-daede/daed-filter-sync.sh
 ```
 
 Changes to download sources, package lists, signature handling, GitHub Actions permissions, Release naming, OVF generation, or cleanup behavior are security-sensitive. Explain the source and risk impact in the pull request.

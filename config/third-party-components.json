@@ -87,15 +87,6 @@
       ]
     },
     {
-      "name": "LuCI Zerotier",
-      "license": "GPL-3.0-only",
-      "source": "https://github.com/immortalwrt/luci",
-      "source_path": "applications/luci-app-zerotier",
-      "packages": [
-        "luci-app-zerotier"
-      ]
-    },
-    {
       "name": "LuCI Argon theme",
       "license": "Apache-2.0",
       "source": "https://github.com/immortalwrt/luci",
