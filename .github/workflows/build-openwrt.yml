@@ -115,8 +115,9 @@ jobs:
           download_asset kenzok8/openwrt-daede "luci-app-daede-*-${IB_PACKAGE_ARCH}.apk" packages-daed 60
           download_asset kenzok8/openwrt-daede "daed-*-${IB_PACKAGE_ARCH}.apk" packages-daed 120
           download_asset kenzok8/openwrt-daede "vmlinux-btf-*-${IB_PACKAGE_ARCH}.apk" packages-daed 120
+          arch_suffix="-${IB_PACKAGE_ARCH}.apk"
           for package in packages-daed/*-"${IB_PACKAGE_ARCH}".apk; do
-            mv "${package}" "${package%-${IB_PACKAGE_ARCH}.apk}.apk"
+            mv "${package}" "${package%"${arch_suffix}"}.apk"
           done
           python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
             --archive "/tmp/mosdns/${mosdns_archive}" \
