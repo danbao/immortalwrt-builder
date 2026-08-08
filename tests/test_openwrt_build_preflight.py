@@ -414,6 +414,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
                     apk_bin,
                     repositories,
                     keys_dir,
+                    "i386_pentium4",
                     package_index=tmp / "package-index.json",
                     provenance=tmp / "provenance.json",
                 )
@@ -422,6 +423,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             command = run.call_args_list[1].args[0]
             self.assertIn("--keys-dir", command)
             self.assertNotIn("--allow-untrusted", command)
+            self.assertIn("--arch", run.call_args_list[0].args[0])
             records = json.loads((tmp / "package-index.json").read_text(encoding="utf-8"))["packages"]
             self.assertEqual(records[0]["source_path"], "feeds/luci/applications/demo")
             provenance = json.loads((tmp / "provenance.json").read_text(encoding="utf-8"))
@@ -471,9 +473,25 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
                         apk_bin,
                         repositories,
                         keys_dir,
+                        "i386_pentium4",
                         package_index=tmp / "package-index.json",
                         provenance=tmp / "provenance.json",
                     )
+
+            failed_init = preflight.subprocess.CompletedProcess(
+                args=[], returncode=99, stdout="", stderr="signature rejected"
+            )
+            with mock.patch.object(
+                preflight.subprocess, "run", return_value=failed_init
+            ), self.assertRaisesRegex(RuntimeError, "signature rejected"):
+                preflight.collect_apk_package_index(
+                    apk_bin,
+                    repositories,
+                    keys_dir,
+                    "i386_pentium4",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                )
 
         with tempfile.TemporaryDirectory() as tmp_s:
             missing = Path(tmp_s)
@@ -482,6 +500,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
                     missing / "apk",
                     missing / "repositories",
                     missing / "keys",
+                    "",
                     package_index=missing / "package-index.json",
                     provenance=missing / "provenance.json",
                 )

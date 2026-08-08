@@ -553,11 +553,17 @@ def collect_apk_package_index(
     apk_bin: Path,
     repositories: Path,
     keys_dir: Path,
+    architecture: str,
     *,
     package_index: Path,
     provenance: Path,
 ) -> None:
-    if not apk_bin.is_file() or not repositories.is_file() or not keys_dir.is_dir():
+    if (
+        not apk_bin.is_file()
+        or not repositories.is_file()
+        or not keys_dir.is_dir()
+        or not architecture.strip()
+    ):
         raise ValueError("APK metadata inputs are incomplete")
     with tempfile.TemporaryDirectory(prefix="apk-query-") as root_dir:
         common_command = [
@@ -572,13 +578,18 @@ def collect_apk_package_index(
         ]
         environment = os.environ.copy()
         environment["PATH"] = f"{apk_bin.resolve().parent}:{environment.get('PATH', '')}"
-        subprocess.run(
-            [*common_command, "add", "--initdb"],
-            check=True,
+        init_result = subprocess.run(
+            [*common_command, "add", "--arch", architecture, "--initdb"],
+            check=False,
             capture_output=True,
             text=True,
             env=environment,
         )
+        if init_result.returncode:
+            raise RuntimeError(
+                f"APK database initialization failed ({init_result.returncode}): "
+                f"{init_result.stderr.strip()}"
+            )
         command = [
             *common_command,
             "query",
@@ -887,6 +898,7 @@ def cmd_collect_apk_package_index(args: argparse.Namespace) -> int:
         args.apk_bin,
         args.repositories,
         args.keys_dir,
+        args.architecture,
         package_index=args.package_index,
         provenance=args.provenance,
     )
@@ -1071,6 +1083,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     collect_apk.add_argument("--apk-bin", type=Path, required=True)
     collect_apk.add_argument("--repositories", type=Path, required=True)
     collect_apk.add_argument("--keys-dir", type=Path, required=True)
+    collect_apk.add_argument("--architecture", required=True)
     collect_apk.add_argument("--package-index", type=Path, required=True)
     collect_apk.add_argument("--provenance", type=Path, required=True)
     collect_apk.set_defaults(func=cmd_collect_apk_package_index)

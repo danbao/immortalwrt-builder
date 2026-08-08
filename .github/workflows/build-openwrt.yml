@@ -130,6 +130,7 @@ jobs:
             --apk-bin imagebuilder/staging_dir/host/bin/apk \
             --repositories imagebuilder/repositories \
             --keys-dir imagebuilder/keys \
+            --architecture "${IB_PACKAGE_ARCH}" \
             --package-index dist/metadata/package-index.json \
             --provenance dist/metadata/upstream-provenance.json
 
