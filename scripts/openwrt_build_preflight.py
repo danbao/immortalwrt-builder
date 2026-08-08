@@ -604,11 +604,15 @@ def collect_apk_package_index(
         ]
         result = subprocess.run(
             command,
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
             env=environment,
         )
+        if result.returncode:
+            raise RuntimeError(
+                f"APK repository query failed ({result.returncode}): {result.stderr.strip()}"
+            )
     payload = json.loads(result.stdout)
     packages = payload.get("packages", []) if isinstance(payload, dict) else payload
     if not isinstance(packages, list) or not packages:
