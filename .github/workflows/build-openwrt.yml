@@ -86,6 +86,7 @@ jobs:
             -e 's/^CONFIG_VDI_IMAGES=y/# CONFIG_VDI_IMAGES is not set/' \
             -e 's/^CONFIG_VMDK_IMAGES=y/# CONFIG_VMDK_IMAGES is not set/' \
             -e 's/^CONFIG_VHDX_IMAGES=y/# CONFIG_VHDX_IMAGES is not set/' \
+            -e 's/^CONFIG_TARGET_ROOTFS_EXT4FS=y/# CONFIG_TARGET_ROOTFS_EXT4FS is not set/' \
             .config
 
       - name: Download inspected release assets
@@ -93,7 +94,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd imagebuilder
-          mkdir -p packages
+          mkdir -p packages packages-daed
           download_asset() {
             python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
               --repo "$1" \
@@ -111,9 +112,9 @@ jobs:
           nikki_archive="nikki_${IB_PACKAGE_ARCH}-openwrt-${OPENWRT_PACKAGE_SERIES}.tar.gz"
           download_asset sbwml/luci-app-mosdns "${mosdns_archive}" /tmp/mosdns 120
           download_asset nikkinikki-org/OpenWrt-nikki "${nikki_archive}" /tmp/nikki 120
-          download_asset kenzok8/openwrt-daede "luci-app-daede-*-${IB_PACKAGE_ARCH}.apk" packages 60
-          download_asset kenzok8/openwrt-daede "daed-*-${IB_PACKAGE_ARCH}.apk" packages 120
-          download_asset kenzok8/openwrt-daede "vmlinux-btf-*-${IB_PACKAGE_ARCH}.apk" packages 120
+          download_asset kenzok8/openwrt-daede "luci-app-daede-*-${IB_PACKAGE_ARCH}.apk" packages-daed 60
+          download_asset kenzok8/openwrt-daede "daed-*-${IB_PACKAGE_ARCH}.apk" packages-daed 120
+          download_asset kenzok8/openwrt-daede "vmlinux-btf-*-${IB_PACKAGE_ARCH}.apk" packages-daed 120
           python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
             --archive "/tmp/mosdns/${mosdns_archive}" \
             --target /tmp/mosdns/extract
@@ -153,6 +154,11 @@ jobs:
             package_file="$2"
             output_name="$3"
             manifest_name="$4"
+
+            if [ "${flavor}" = "daed" ]; then
+              cp packages-daed/*.apk packages/
+              rm -f packages/packages.adb
+            fi
 
             packages="$(python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" package-string --package-file "${package_file}")"
             make manifest PROFILE="generic" PACKAGES="${packages}" | tee "/tmp/${manifest_name}.log"
