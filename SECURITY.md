@@ -13,3 +13,7 @@ Include affected commit or Release tag, reproduction steps, expected impact, and
 ## Supply-chain limitations
 
 Some upstreams do not publish independently trusted digests or signing keys. Their verification status is disclosed in every Release's `upstream-provenance.json`. A successful build does not guarantee that every upstream project is uncompromised.
+
+## Runtime secrets
+
+Never commit router backups, UCI exports, SSH private keys, dashboard passwords, proxy subscription URLs, VPN configuration, or captured traffic. Runtime secrets belong on the deployed VM only. Examples and diagnostics must use redacted placeholders; CI scans every change with gitleaks before accepting it.

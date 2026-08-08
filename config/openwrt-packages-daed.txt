@@ -1,5 +1,6 @@
 # Core LuCI UI
 luci
+luci-ssl
 luci-i18n-base-zh-cn
 luci-theme-argon
 
@@ -9,13 +10,13 @@ daed
 v2ray-geoip
 v2ray-geosite
 
-# DNS, remote access, and network applications
+# DNS
 luci-app-mosdns
-luci-app-vlmcsd
+
+# Remote access and Windows/Office activation
 luci-app-tailscale
 tailscale
-luci-app-zerotier
-zerotier
+luci-app-vlmcsd
 
 # Virtualization and network drivers
 kmod-vmxnet3
@@ -27,7 +28,6 @@ kmod-e1000e
 kmod-tcp-bbr
 kmod-tun
 irqbalance
-luci-app-upnp
 kmod-nft-offload
 kmod-sched-core
 kmod-sched-bpf

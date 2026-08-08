@@ -29,6 +29,22 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         self.assertNotIn("luci-i18n-nikki-zh-cn", packages)
         self.assertNotIn("mihomo-meta", packages)
 
+    def test_profiles_keep_required_remote_and_kms_services(self) -> None:
+        config_dir = Path(__file__).resolve().parents[1] / "config"
+        for filename in ("openwrt-packages.txt", "openwrt-packages-daed.txt"):
+            with self.subTest(filename=filename):
+                packages = set(preflight.read_packages(config_dir / filename))
+                self.assertIn("luci-ssl", packages)
+                self.assertIn("luci-app-tailscale", packages)
+                self.assertIn("tailscale", packages)
+                self.assertIn("luci-app-vlmcsd", packages)
+                for package in (
+                    "luci-app-zerotier",
+                    "zerotier",
+                    "luci-app-upnp",
+                ):
+                    self.assertNotIn(package, packages)
+
     def test_read_packages_ignores_comments_and_rejects_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
             package_file = Path(tmp_s) / "packages.txt"

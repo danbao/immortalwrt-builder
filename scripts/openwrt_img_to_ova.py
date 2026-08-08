@@ -390,7 +390,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     scan.add_argument("--manifest", type=Path, default=Path("dist/release-state.json"))
     scan.add_argument("--out-dir", type=Path, default=Path("dist"))
     scan.add_argument("--results", type=Path, default=Path("dist/build-results.json"))
-    scan.add_argument("--nic-count", type=int, default=6)
+    scan.add_argument("--nic-count", type=int, default=1)
     scan.add_argument("--release-date", help="build/release date in YYYYMMDD format")
     scan.add_argument("--immortalwrt-version-code", help="ImmortalWrt version.buildinfo value")
     scan.add_argument("--immortalwrt-commit", help="ImmortalWrt source commit id")
