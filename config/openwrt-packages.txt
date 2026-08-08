@@ -13,7 +13,6 @@ luci-i18n-nikki-zh-cn
 mihomo-meta
 
 # Remote access and Windows/Office activation
-luci-app-tailscale
 tailscale
 luci-app-vlmcsd
 

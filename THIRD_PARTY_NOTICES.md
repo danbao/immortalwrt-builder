@@ -13,7 +13,6 @@ Primary upstream projects include:
 | OpenClash | https://github.com/vernesong/OpenClash | MIT |
 | OpenWrt Nikki | https://github.com/nikkinikki-org/OpenWrt-nikki | GPL-3.0 |
 | PassWall 2 | https://github.com/Openwrt-Passwall/openwrt-passwall2 | GPL-3.0 |
-| LuCI Tailscale | https://github.com/asvow/luci-app-tailscale | GPL-3.0 |
 | LuCI MosDNS | https://github.com/sbwml/luci-app-mosdns | GPL-3.0 |
 | OpenWrt daed/daede | https://github.com/kenzok8/openwrt-daede | AGPL-3.0 |
 

@@ -106,7 +106,6 @@ jobs:
           }
           mkdir -p "${GITHUB_WORKSPACE}/dist/metadata"
           download_asset Openwrt-Passwall/openwrt-passwall2 'luci-app-passwall2-*.apk' packages 60
-          download_asset asvow/luci-app-tailscale 'luci-app-tailscale-*.apk' packages 60
           download_asset vernesong/OpenClash 'luci-app-openclash-*.apk' packages 60
           mosdns_archive="${IB_PACKAGE_ARCH}-openwrt-${OPENWRT_PACKAGE_SERIES}.tar.gz"
           nikki_archive="nikki_${IB_PACKAGE_ARCH}-openwrt-${OPENWRT_PACKAGE_SERIES}.tar.gz"
