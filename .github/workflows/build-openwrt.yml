@@ -138,7 +138,6 @@ jobs:
         run: |
           python3 scripts/openwrt_build_preflight.py resolve-source-refs \
             --components config/third-party-components.json \
-            --feed-file config/third-party-feeds.tsv \
             --provenance dist/metadata/upstream-provenance.json \
             --feeds-buildinfo-url "${IB_BASE_URL}/feeds.buildinfo" \
             --immortalwrt-commit "${IMMORTALWRT_COMMIT}" \

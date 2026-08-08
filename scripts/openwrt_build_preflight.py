@@ -686,7 +686,7 @@ def github_repo_from_source(source: str) -> str:
 def resolve_source_refs(
     *,
     components_path: Path,
-    feed_file: Path,
+    feed_file: Path | None,
     provenance_path: Path,
     feeds_buildinfo: str,
     immortalwrt_commit: str,
@@ -763,7 +763,7 @@ def resolve_source_refs(
             "archive_url": f"{source}/archive/{commit}.tar.gz",
             "artifact_source_relation": "unverified-upstream",
         }
-    for feed in read_feeds(feed_file):
+    for feed in (read_feeds(feed_file) if feed_file else []):
         if not feed.source:
             raise ValueError(f"feed has no source repository: {feed.name}")
         repo = github_repo_from_source(feed.source)
@@ -1097,7 +1097,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="resolve exact upstream source commits and release tags",
     )
     source_refs.add_argument("--components", type=Path, required=True)
-    source_refs.add_argument("--feed-file", type=Path, required=True)
+    source_refs.add_argument("--feed-file", type=Path)
     source_refs.add_argument("--provenance", type=Path, required=True)
     source_refs.add_argument("--feeds-buildinfo-url", required=True)
     source_refs.add_argument("--immortalwrt-commit", required=True)
