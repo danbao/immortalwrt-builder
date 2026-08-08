@@ -46,7 +46,7 @@
 
 ## 当前版本边界
 
-构建默认使用 ImmortalWrt 25.12.1 的 `x86/generic` ImageBuilder。第三方组件统一选用 OpenWrt 25.12 对应的 APK 资产；官方仓库签名仍由 ImageBuilder 自带密钥校验，本地附加 APK 会由 ImageBuilder 建立并签署独立索引。Tailscale 使用 25.12.1 官方包，避免旧第三方 LuCI 包与官方服务脚本冲突。
+构建默认使用 ImmortalWrt 25.12.1 的 `x86/64` ImageBuilder。第三方组件统一选用 OpenWrt 25.12 对应的 x86_64 APK 资产；官方仓库签名仍由 ImageBuilder 自带密钥校验，本地附加 APK 会由 ImageBuilder 建立并签署独立索引。Tailscale 使用 25.12.1 官方包，避免旧第三方 LuCI 包与官方服务脚本冲突。
 
 25.12 已从 opkg 切换到 apk，旧系统不应直接在线执行跨大版本全量包升级。替换旧旁路由时应使用本项目生成的新镜像并重新验证配置，保留 VMware 快照和旧 VM 回退路径。
 

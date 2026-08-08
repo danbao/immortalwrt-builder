@@ -1050,7 +1050,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     imagebuilder_info = subparsers.add_parser("imagebuilder-info", help="resolve and verify ImageBuilder metadata")
     imagebuilder_info.add_argument("--version", required=True)
-    imagebuilder_info.add_argument("--target", default="x86/generic")
+    imagebuilder_info.add_argument("--target", default="x86/64")
     imagebuilder_info.add_argument("--github-env", type=Path)
     add_common_network_args(imagebuilder_info)
     imagebuilder_info.set_defaults(func=cmd_imagebuilder_info)

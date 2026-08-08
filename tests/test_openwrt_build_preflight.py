@@ -215,12 +215,12 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "found 0"):
             preflight.parse_sha256sums(payload, "missing.tar.zst")
 
-    def test_imagebuilder_defaults_to_25_12_x86_generic(self) -> None:
+    def test_imagebuilder_defaults_to_25_12_x86_64(self) -> None:
         args = preflight.parse_args(["imagebuilder-info", "--version", "25.12.1"])
-        self.assertEqual(args.target, "x86/generic")
+        self.assertEqual(args.target, "x86/64")
         self.assertEqual(
             preflight.imagebuilder_archive_name(args.version, args.target),
-            "immortalwrt-imagebuilder-25.12.1-x86-generic.Linux-x86_64.tar.zst",
+            "immortalwrt-imagebuilder-25.12.1-x86-64.Linux-x86_64.tar.zst",
         )
 
     def test_verify_release_asset_checks_api_digest(self) -> None:

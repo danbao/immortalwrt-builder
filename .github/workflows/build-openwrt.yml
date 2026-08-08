@@ -21,8 +21,8 @@ concurrency:
 
 env:
   IB_VERSION: "25.12.1"
-  IB_TARGET: x86/generic
-  IB_PACKAGE_ARCH: i386_pentium4
+  IB_TARGET: x86/64
+  IB_PACKAGE_ARCH: x86_64
   OPENWRT_PACKAGE_SERIES: "25.12"
 
 jobs:
@@ -113,6 +113,7 @@ jobs:
           download_asset nikkinikki-org/OpenWrt-nikki "${nikki_archive}" /tmp/nikki 120
           download_asset kenzok8/openwrt-daede "luci-app-daede-*-${IB_PACKAGE_ARCH}.apk" packages 60
           download_asset kenzok8/openwrt-daede "daed-*-${IB_PACKAGE_ARCH}.apk" packages 120
+          download_asset kenzok8/openwrt-daede "vmlinux-btf-*-${IB_PACKAGE_ARCH}.apk" packages 120
           python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
             --archive "/tmp/mosdns/${mosdns_archive}" \
             --target /tmp/mosdns/extract
