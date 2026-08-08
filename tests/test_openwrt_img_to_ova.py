@@ -33,6 +33,15 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("--nic-count 1", workflow)
 
+    def test_build_workflow_pins_compatible_immortalwrt_release(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build-openwrt.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('IB_VERSION: "25.12.1"', workflow)
+        self.assertNotIn("ib_version:", workflow)
+        self.assertIn("IB_TARGET: x86/64", workflow)
+        self.assertIn("IB_PACKAGE_ARCH: x86_64", workflow)
+
     def test_daed_release_metadata_uses_distinct_tag_title_and_assets(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(
             "immortalwrt-x86-64-daed",

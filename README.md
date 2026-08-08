@@ -46,9 +46,11 @@
 
 ## 当前版本边界
 
-构建目前仍固定在 ImmortalWrt 24.10.6。官方已经把 24.10 标记为旧稳定版，而 25.12.1 是当前稳定版；不过本项目的 MosDNS 预编译资产和部分第三方 feed 仍使用 24.10/opkg 布局，25.12 又已转向 apk，并且 x86 target 布局发生变化。因此这里没有做只改版本号的假升级。
+构建默认使用 ImmortalWrt 25.12.1 的 `x86/64` ImageBuilder。第三方组件统一选用 OpenWrt 25.12 对应的 x86_64 APK 资产；官方仓库签名仍由 ImageBuilder 自带密钥校验，本地附加 APK 会由 ImageBuilder 建立并签署独立索引。Tailscale 使用 25.12.1 官方包，避免旧第三方 LuCI 包与官方服务脚本冲突。
 
-迁移到 25.12 前必须在独立构建中同时验证：ImageBuilder target/profile、MosDNS、daed/daede、Nikki/PassWall feed、包管理器、过滤脚本和 OVA 启动。验证通过后再修改默认构建版本，禁止在现用旁路由上在线跨大版本升级。
+25.12 已从 opkg 切换到 apk，旧系统不应直接在线执行跨大版本全量包升级。替换旧旁路由时应使用本项目生成的新镜像并重新验证配置，保留 VMware 快照和旧 VM 回退路径。
+
+每次发布仍须在独立构建中同时验证：ImageBuilder target/profile、MosDNS、daed/daede、Nikki/PassWall、APK 包解析、过滤脚本和 OVA 启动。禁止在现用旁路由上在线跨大版本升级。
 
 ## 构建计划
 
@@ -64,7 +66,7 @@ GitHub Actions 每天北京时间 02:00 自动执行构建。手动运行默认�
 - `.ova` 与 `.ova.sha256`：ESXi 导入和完整性校验。
 - `build-metadata.json`：ImageBuilder、ImmortalWrt commit 和构建结果。
 - `packages.spdx.json`：实际 ImageBuilder manifest 生成的 SPDX 2.3 包清单。
-- `upstream-provenance.json`：第三方 feed、Release tag、asset ID、digest 和降级校验状态。
+- `upstream-provenance.json`：官方 APK 索引、第三方 Release tag、asset ID、digest 和降级校验状态。
 - `third-party-sources.json`：第三方组件的许可证及源码位置。
 - GitHub artifact attestation：raw image 和 OVA 的构建来源证明。
 
@@ -72,7 +74,7 @@ GitHub Actions 每天北京时间 02:00 自动执行构建。手动运行默认�
 
 ImageBuilder 使用 ImmortalWrt 官方 SHA256 校验。GitHub Release 依赖会先解析本次 `latest` 的 tag 和 asset ID，再按 asset ID 下载；API 提供 SHA256 digest 时强制校验，下载期间元数据发生变化时构建失败。
 
-第三方 feed 不会被加入 ImageBuilder，也不会关闭官方 feed 的签名校验。工作流会快照第三方索引、按索引 SHA256 镜像所有包到本地 `packages/`，并在下载后重新确认索引未变化。由于第三方签名公钥尚未全部建立独立信任链，这些镜像记录为 `hash-verified-packages-untrusted-signing-key`。没有 API digest 的 GitHub 资产记录为 `unverified-upstream`。**这些记录是风险披露，不代表上游内容安全。** 对供应链要求严格的使用者应检查随 Release 发布的 provenance，或自行固定依赖后构建。
+第三方 feed 不会被加入 ImageBuilder，也不会关闭官方仓库的 APK 签名校验。官方包元数据由 ImageBuilder 自带密钥验证；第三方包从已检查的 GitHub Release 资产下载到本地 `packages/`，API 提供 digest 时强制校验，没有 digest 时明确记录为 `unverified-upstream`。ImageBuilder 会为本地 APK 建立并签署独立索引。**这些记录是风险披露，不代表上游内容安全。** 对供应链要求严格的使用者应检查随 Release 发布的 provenance，或自行固定依赖后构建。
 
 ## 首次启动安全
 

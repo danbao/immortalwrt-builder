@@ -14,7 +14,6 @@ v2ray-geosite
 luci-app-mosdns
 
 # Remote access and Windows/Office activation
-luci-app-tailscale
 tailscale
 luci-app-vlmcsd
 

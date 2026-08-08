@@ -35,7 +35,6 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 packages = set(preflight.read_packages(config_dir / filename))
                 self.assertIn("luci-ssl", packages)
-                self.assertIn("luci-app-tailscale", packages)
                 self.assertIn("tailscale", packages)
                 self.assertIn("luci-app-vlmcsd", packages)
                 for package in (
@@ -160,6 +159,45 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             self.assertEqual(result["feeds"]["external"]["commit"], external_feed_commit)
             self.assertEqual(github_api.call_count, 2)
 
+    def test_resolve_source_refs_allows_no_third_party_feed_file(self) -> None:
+        build_commit = "a" * 40
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            components_path = tmp / "components.json"
+            provenance_path = tmp / "provenance.json"
+            components_path.write_text(
+                json.dumps(
+                    {
+                        "components": [
+                            {
+                                "name": "core",
+                                "source": "https://github.com/immortalwrt/immortalwrt",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            provenance_path.write_text('{"records": []}', encoding="utf-8")
+            with mock.patch.object(
+                preflight,
+                "github_api_json",
+                return_value={"sha": build_commit},
+            ):
+                result = preflight.resolve_source_refs(
+                    components_path=components_path,
+                    feed_file=None,
+                    provenance_path=provenance_path,
+                    feeds_buildinfo=(
+                        "src-git packages "
+                        f"https://github.com/immortalwrt/packages.git^{'b' * 40}\n"
+                    ),
+                    immortalwrt_commit=build_commit[:12],
+                    timeout=1,
+                    retries=1,
+                )
+            self.assertEqual(result["feeds"]["packages"]["commit"], "b" * 40)
+
     def test_select_release_asset_requires_exactly_one_match(self) -> None:
         assets = [{"name": "luci-app-demo_1_all.ipk"}, {"name": "demo.tar.gz"}]
         self.assertEqual(preflight.select_release_asset(assets, "luci-app-demo_*_all.ipk")["name"], "luci-app-demo_1_all.ipk")
@@ -176,6 +214,14 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "found 0"):
             preflight.parse_sha256sums(payload, "missing.tar.zst")
+
+    def test_imagebuilder_defaults_to_25_12_x86_64(self) -> None:
+        args = preflight.parse_args(["imagebuilder-info", "--version", "25.12.1"])
+        self.assertEqual(args.target, "x86/64")
+        self.assertEqual(
+            preflight.imagebuilder_archive_name(args.version, args.target),
+            "immortalwrt-imagebuilder-25.12.1-x86-64.Linux-x86_64.tar.zst",
+        )
 
     def test_verify_release_asset_checks_api_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
@@ -376,6 +422,148 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
                 timeout=1,
                 retries=1,
             )
+
+    def test_collect_apk_package_index_uses_signed_imagebuilder_repositories(self) -> None:
+        package = {
+            "name": "demo",
+            "version": "1.2.3-r1",
+            "license": "MIT",
+            "download-url": "https://downloads.example/packages/i386_pentium4/luci/demo.apk",
+            "file-size": 123,
+            "origin": "feeds/luci/applications/demo",
+        }
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            apk_bin = tmp / "apk"
+            repositories = tmp / "repositories"
+            keys_dir = tmp / "keys"
+            apk_bin.write_text("binary", encoding="utf-8")
+            repositories.write_text("https://downloads.example/packages.adb\n", encoding="utf-8")
+            keys_dir.mkdir()
+            completed = preflight.subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=json.dumps([package]), stderr=""
+            )
+            with mock.patch.object(
+                preflight.subprocess,
+                "run",
+                side_effect=[preflight.subprocess.CompletedProcess(args=[], returncode=0), completed],
+            ) as run:
+                preflight.collect_apk_package_index(
+                    apk_bin,
+                    repositories,
+                    keys_dir,
+                    "i386_pentium4",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                )
+
+            self.assertEqual(run.call_count, 2)
+            command = run.call_args_list[1].args[0]
+            self.assertIn("--keys-dir", command)
+            self.assertNotIn("--allow-untrusted", command)
+            self.assertNotIn("--usermode", command)
+            self.assertIn("--usermode", run.call_args_list[0].args[0])
+            self.assertIn("--arch", run.call_args_list[0].args[0])
+            records = json.loads((tmp / "package-index.json").read_text(encoding="utf-8"))["packages"]
+            self.assertEqual(records[0]["source_path"], "feeds/luci/applications/demo")
+            provenance = json.loads((tmp / "provenance.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                provenance["records"][0]["verification_status"],
+                "verified-by-imagebuilder-apk-signing-keys",
+            )
+
+    def test_collect_apk_package_index_rejects_invalid_inputs_and_metadata(self) -> None:
+        valid = {
+            "name": "demo",
+            "version": "1-r1",
+            "license": "MIT",
+            "download-url": "https://downloads.example/demo.apk",
+            "file-size": 1,
+            "origin": "feeds/packages/demo",
+        }
+        invalid_payloads = (
+            ("not-json", "Expecting value"),
+            ("[]", "returned no packages"),
+            ('["not-an-object"]', "invalid package record"),
+            (json.dumps([{**valid, "name": ""}]), "metadata is incomplete"),
+            (json.dumps([{**valid, "download-url": "http://downloads.example/demo.apk"}]), "non-HTTPS"),
+            (json.dumps([{**valid, "file-size": "invalid"}]), "invalid literal"),
+        )
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            apk_bin = tmp / "apk"
+            repositories = tmp / "repositories"
+            keys_dir = tmp / "keys"
+            apk_bin.write_text("binary", encoding="utf-8")
+            repositories.write_text("https://downloads.example/packages.adb\n", encoding="utf-8")
+            keys_dir.mkdir()
+
+            for payload, message in invalid_payloads:
+                with self.subTest(message=message), mock.patch.object(
+                    preflight.subprocess,
+                    "run",
+                    side_effect=[
+                        preflight.subprocess.CompletedProcess(args=[], returncode=0),
+                        preflight.subprocess.CompletedProcess(
+                            args=[], returncode=0, stdout=payload, stderr=""
+                        ),
+                    ],
+                ), self.assertRaisesRegex(ValueError, message):
+                    preflight.collect_apk_package_index(
+                        apk_bin,
+                        repositories,
+                        keys_dir,
+                        "i386_pentium4",
+                        package_index=tmp / "package-index.json",
+                        provenance=tmp / "provenance.json",
+                    )
+
+            failed_init = preflight.subprocess.CompletedProcess(
+                args=[], returncode=99, stdout="", stderr="signature rejected"
+            )
+            with mock.patch.object(
+                preflight.subprocess, "run", return_value=failed_init
+            ), self.assertRaisesRegex(RuntimeError, "signature rejected"):
+                preflight.collect_apk_package_index(
+                    apk_bin,
+                    repositories,
+                    keys_dir,
+                    "i386_pentium4",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                )
+
+            failed_query = preflight.subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="repository rejected"
+            )
+            with mock.patch.object(
+                preflight.subprocess,
+                "run",
+                side_effect=[
+                    preflight.subprocess.CompletedProcess(args=[], returncode=0),
+                    failed_query,
+                ],
+            ), self.assertRaisesRegex(RuntimeError, "repository rejected"):
+                preflight.collect_apk_package_index(
+                    apk_bin,
+                    repositories,
+                    keys_dir,
+                    "i386_pentium4",
+                    package_index=tmp / "package-index.json",
+                    provenance=tmp / "provenance.json",
+                )
+
+        with tempfile.TemporaryDirectory() as tmp_s:
+            missing = Path(tmp_s)
+            with self.assertRaisesRegex(ValueError, "inputs are incomplete"):
+                preflight.collect_apk_package_index(
+                    missing / "apk",
+                    missing / "repositories",
+                    missing / "keys",
+                    "",
+                    package_index=missing / "package-index.json",
+                    provenance=missing / "provenance.json",
+                )
 
     def test_copy_raw_images_handles_multiple_built_items(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
