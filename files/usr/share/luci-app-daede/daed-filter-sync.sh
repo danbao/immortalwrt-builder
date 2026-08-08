@@ -1,5 +1,7 @@
 #!/bin/sh
 # shellcheck shell=dash
+# GraphQL variables intentionally use literal dollar signs in single quotes.
+# shellcheck disable=SC2016
 
 set -eu
 umask 077
@@ -102,7 +104,9 @@ esac
 GRAPHQL_URL="http://${LISTEN_ADDR}/graphql"
 USERNAME="$(uci -q get daed.config.dashboard_username)"
 PASSWORD="$(uci -q get daed.config.dashboard_password)"
-[ -n "$USERNAME" ] && [ -n "$PASSWORD" ] || fail "Missing daed dashboard credentials"
+if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+	fail "Missing daed dashboard credentials"
+fi
 pidof daed >/dev/null 2>&1 || fail "daed is not running"
 
 login_body="$TMPDIR/login-body.json"
