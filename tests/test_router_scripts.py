@@ -313,6 +313,8 @@ class RouterScriptTests(unittest.TestCase):
         ).stdout.splitlines()
         for relative in files:
             path = ROOT / relative
+            if not path.is_file():
+                continue
             try:
                 content = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:

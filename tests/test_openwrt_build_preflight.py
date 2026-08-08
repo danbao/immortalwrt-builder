@@ -160,6 +160,45 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             self.assertEqual(result["feeds"]["external"]["commit"], external_feed_commit)
             self.assertEqual(github_api.call_count, 2)
 
+    def test_resolve_source_refs_allows_no_third_party_feed_file(self) -> None:
+        build_commit = "a" * 40
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            components_path = tmp / "components.json"
+            provenance_path = tmp / "provenance.json"
+            components_path.write_text(
+                json.dumps(
+                    {
+                        "components": [
+                            {
+                                "name": "core",
+                                "source": "https://github.com/immortalwrt/immortalwrt",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            provenance_path.write_text('{"records": []}', encoding="utf-8")
+            with mock.patch.object(
+                preflight,
+                "github_api_json",
+                return_value={"sha": build_commit},
+            ):
+                result = preflight.resolve_source_refs(
+                    components_path=components_path,
+                    feed_file=None,
+                    provenance_path=provenance_path,
+                    feeds_buildinfo=(
+                        "src-git packages "
+                        f"https://github.com/immortalwrt/packages.git^{'b' * 40}\n"
+                    ),
+                    immortalwrt_commit=build_commit[:12],
+                    timeout=1,
+                    retries=1,
+                )
+            self.assertEqual(result["feeds"]["packages"]["commit"], "b" * 40)
+
     def test_select_release_asset_requires_exactly_one_match(self) -> None:
         assets = [{"name": "luci-app-demo_1_all.ipk"}, {"name": "demo.tar.gz"}]
         self.assertEqual(preflight.select_release_asset(assets, "luci-app-demo_*_all.ipk")["name"], "luci-app-demo_1_all.ipk")
