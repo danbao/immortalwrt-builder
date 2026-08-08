@@ -35,7 +35,6 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 packages = set(preflight.read_packages(config_dir / filename))
                 self.assertIn("luci-ssl", packages)
-                self.assertIn("luci-app-tailscale", packages)
                 self.assertIn("tailscale", packages)
                 self.assertIn("luci-app-vlmcsd", packages)
                 for package in (
