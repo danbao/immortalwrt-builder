@@ -570,7 +570,6 @@ def collect_apk_package_index(
             str(apk_bin.resolve()),
             "--root",
             root_dir,
-            "--usermode",
             "--keys-dir",
             str(keys_dir.resolve()),
             "--repositories-file",
@@ -580,7 +579,7 @@ def collect_apk_package_index(
         environment = os.environ.copy()
         environment["PATH"] = f"{apk_bin.resolve().parent}:{environment.get('PATH', '')}"
         init_result = subprocess.run(
-            [*common_command, "add", "--arch", architecture, "--initdb"],
+            [*common_command, "add", "--arch", architecture, "--initdb", "--usermode"],
             check=False,
             capture_output=True,
             text=True,

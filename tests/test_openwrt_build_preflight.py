@@ -423,7 +423,8 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             command = run.call_args_list[1].args[0]
             self.assertIn("--keys-dir", command)
             self.assertNotIn("--allow-untrusted", command)
-            self.assertIn("--usermode", command)
+            self.assertNotIn("--usermode", command)
+            self.assertIn("--usermode", run.call_args_list[0].args[0])
             self.assertIn("--arch", run.call_args_list[0].args[0])
             records = json.loads((tmp / "package-index.json").read_text(encoding="utf-8"))["packages"]
             self.assertEqual(records[0]["source_path"], "feeds/luci/applications/demo")
