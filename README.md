@@ -9,7 +9,7 @@
 - `standard`：PassWall 2、OpenClash、Nikki、MosDNS 等常用旁路由组件。
 - `daed`：使用 `dae`/`daed`，不包含与其冲突的透明代理栈。
 
-两个 flavor 都保留 Tailscale 远程访问和 KMS 激活组件，移除未使用的 ZeroTier 与 MiniUPnP，并默认包含 `luci-ssl`。daed 替换场景优先使用 `daed` flavor，别把几套透明代理栈塞进一台机器互相踩 nftables 规则。
+两个 flavor 都保留 Tailscale 远程访问和 KMS 激活组件，移除未使用的 ZeroTier 与 MiniUPnP，并默认包含 `luci-ssl`。Tailscale 安装后默认停用，登录并确认用途后再手工启用。daed 替换场景优先使用 `daed` flavor，别把几套透明代理栈塞进一台机器互相踩 nftables 规则。
 
 ## 替换旧旁路由
 
@@ -17,14 +17,16 @@
 
 ```sh
 /usr/sbin/bypass-router-configure \
-  '<STAGING_IP>' '<TARGET_IP>' '<GATEWAY_IP>' '<TRUSTED_MANAGEMENT_CIDR>' --confirm
+  '<STAGING_IP>' '<TARGET_IP>' '<GATEWAY_IP>' '<TRUSTED_MANAGEMENT_CIDR>' \
+  --ports 'eth0,eth1' --confirm
 ```
 
 该命令会应用以下无秘密配置：
 
 - LAN 使用临时地址，网关和 DNS 使用主路由地址；目标地址只保存给切换脚本。
-- `eth0` 与 `eth1` 加入启用 STP 的 `br-lan`；旧系统里的接口可能叫 `eth3`，迁移依据是 VMware Port Group，不是 Linux 接口编号。
+- `--ports` 指定的接口加入启用 STP 的 `br-lan`，省略时默认为 `eth0,eth1`；端口列表属于现场配置，不写入镜像。
 - DHCP、DHCPv6、RA 和流量卸载保持关闭。
+- MosDNS 监听 `0.0.0.0:5335`，dnsmasq 转发到本机 MosDNS；国内 DNS 使用阿里与腾讯，国外 DoH 使用 Google 与 Cloudflare，不包含 Quad9。
 - LuCI 在 LAN 地址提供 HTTPS，HTTP 仅重定向；daed 面板只绑定 LAN 地址的 `2023` 端口。SSH、LuCI 和 daed 管理端口仅允许指定可信管理网段访问。
 - 系统日志缓冲区为 1 MiB，匿名磁盘挂载关闭。
 
@@ -95,7 +97,10 @@ shellcheck files/etc/uci-defaults/99-bypass-router.sh
 shellcheck files/usr/sbin/bypass-router-configure \
   files/usr/sbin/bypass-router-cutover \
   files/usr/sbin/bypass-router-harden \
-  files/usr/share/luci-app-daede/daed-filter-sync.sh
+  files/usr/sbin/bypass-router-daed-configure \
+  files/usr/share/luci-app-daede/daed-filter-sync.sh \
+  files/usr/local/sbin/daed-subscription-sync \
+  files/usr/local/sbin/mosdns-geo-update-verified
 ```
 
 ### daed 订阅名称过滤
@@ -103,14 +108,23 @@ shellcheck files/usr/sbin/bypass-router-configure \
 `daed` 的群组 API 不能直接为整条订阅设置名称排除规则。固件中包含
 `/usr/share/luci-app-daede/daed-filter-sync.sh`，用于更新持久订阅后，把符合条件的节点逐个同步到群组。
 
-例如，将订阅 `codeap` 中名称不含“备用”的节点同步到 `proxy`：
+在 LuCI 中设置 daed 管理账号并导入订阅后，执行一次公开默认初始化：
 
 ```sh
-/usr/share/luci-app-daede/daed-filter-sync.sh 'codeap' 'proxy' '备用'
+/usr/sbin/bypass-router-daed-configure '<SUBSCRIPTION_TAG>' \
+  --resolver '<DIRECT_DNS_IPV4>' --confirm
 ```
 
-脚本会先更新订阅，再生成过滤计划、校验配置并热加载 dae。建议关闭 daed
-内置的订阅定时更新，改由 cron 调用该脚本，避免订阅已更新但群组成员尚未同步的窗口。
+`--resolver` 可以省略，此时使用 `network.lan.dns` 的第一个地址。命令会创建或更新
+`proxy` 组、应用 `min_moving_avg` 和通用 AI 代理规则，并在首次同步成功后安装每六小时执行的 cron。
+
+长期同步入口为 `/usr/local/sbin/daed-subscription-sync`。它从本机 daed 读取已有订阅链接，
+直连下载到权限受限的临时文件，临时切换链接并更新原订阅，然后无论成功失败都恢复远端链接。
+过滤会排除名称含“备用”的节点及 `http/https` 假节点；具体订阅 URL、账号、密码、解析器和节点名单
+只存在于部署设备。临时手工移除的节点可能在下一次同步时重新加入。
+
+MosDNS GeoIP/GeoSite 每周日 03:00 由 `/usr/local/sbin/mosdns-geo-update-verified`
+更新。脚本要求 GitHub Release 提供 SHA256 digest，两个数据文件全部校验成功后才一起替换；失败时保留旧数据。
 
 本地转换还需要 `qemu-img`。Ubuntu 可安装 `qemu-utils`。
 

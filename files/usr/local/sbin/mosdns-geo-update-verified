@@ -1,0 +1,157 @@
+#!/bin/sh
+# shellcheck shell=dash
+
+set -eu
+umask 077
+
+V2RAY_DIR="${MOSDNS_GEO_V2RAY_DIR:-/usr/share/v2ray}"
+RUNTIME_DIR="${MOSDNS_GEO_RUNTIME_DIR:-/var/mosdns}"
+LOG="${MOSDNS_GEO_LOG:-/var/log/mosdns-geo-update.log}"
+LOCK="${MOSDNS_GEO_LOCK:-/var/lock/mosdns-geo-update.lock}"
+MOSDNS_HELPER="${MOSDNS_GEO_HELPER:-/usr/share/mosdns/mosdns.uc}"
+MOSDNS_INIT="${MOSDNS_GEO_INIT:-/etc/init.d/mosdns}"
+ASSET_FIELD_HELPER="${MOSDNS_GEO_ASSET_FIELD_HELPER:-}"
+TMPDIR=''
+SERVICE_STOPPED=0
+
+log() {
+	printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"
+}
+
+fail() {
+	log "ERROR: $*"
+	printf 'ERROR: %s\n' "$*" >&2
+	exit 1
+}
+
+cleanup() {
+	if [ "$SERVICE_STOPPED" = '1' ]; then
+		"$MOSDNS_INIT" start >/dev/null 2>&1 || true
+		SERVICE_STOPPED=0
+	fi
+	[ -z "$TMPDIR" ] || rm -rf "$TMPDIR"
+	rmdir "$LOCK" 2>/dev/null || true
+}
+
+asset_field() {
+	file="$1"
+	asset="$2"
+	field="$3"
+
+	if [ -n "$ASSET_FIELD_HELPER" ]; then
+		"$ASSET_FIELD_HELPER" "$file" "$asset" "$field"
+		return
+	fi
+
+	ucode -D FILE="$file" -D ASSET="$asset" -D FIELD="$field" -e '
+		import { readfile } from "fs";
+		let payload = json(readfile(FILE));
+		for (let item in (payload.assets ?? []))
+			if (item.name == ASSET) {
+				print((item[FIELD] ?? "") + "\n");
+				break;
+			}
+	'
+}
+
+download_verified_asset() {
+	repository="$1"
+	asset="$2"
+	output="$3"
+	api_file="$TMPDIR/$(printf '%s' "$repository" | tr '/' '_').json"
+
+	curl -4 -fsSL --retry 3 --retry-all-errors --retry-delay 3 \
+		--connect-timeout 30 --max-time 60 \
+		-H 'Accept: application/vnd.github+json' \
+		-H 'X-GitHub-Api-Version: 2022-11-28' \
+		-o "$api_file" "https://api.github.com/repos/${repository}/releases/latest" \
+		|| fail "GitHub API request failed for $repository"
+
+	asset_id="$(asset_field "$api_file" "$asset" id | head -n 1)"
+	digest="$(asset_field "$api_file" "$asset" digest | head -n 1)"
+	[ -n "$asset_id" ] || fail "release asset is missing: $repository/$asset"
+	case "$digest" in
+		sha256:*) digest="${digest#sha256:}" ;;
+		*) fail "release asset has no SHA256 digest: $repository/$asset" ;;
+	esac
+	digest="$(printf '%s' "$digest" | tr 'A-F' 'a-f')"
+	printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' \
+		|| fail "invalid SHA256 digest: $repository/$asset"
+
+	curl -4 -fsSL --retry 3 --retry-all-errors --retry-delay 3 \
+		--connect-timeout 30 --max-time 180 \
+		-H 'Accept: application/octet-stream' \
+		-H 'X-GitHub-Api-Version: 2022-11-28' \
+		-o "$output" "https://api.github.com/repos/${repository}/releases/assets/${asset_id}" \
+		|| fail "asset download failed: $repository/$asset"
+
+	actual="$(sha256sum "$output" | awk '{print $1}')"
+	[ "$actual" = "$digest" ] || fail "SHA256 mismatch: $repository/$asset"
+	log "verified $repository/$asset sha256=$actual"
+}
+
+mkdir "$LOCK" 2>/dev/null || fail 'verified MosDNS geodata update is already running'
+trap cleanup EXIT INT TERM
+TMPDIR="$(mktemp -d '/tmp/mosdns-geo-update.XXXXXX')" \
+	|| fail 'failed to create temporary directory'
+
+download_verified_asset 'Loyalsoldier/geoip' 'geoip-only-cn-private.dat' "$TMPDIR/geoip.dat"
+download_verified_asset 'Loyalsoldier/v2ray-rules-dat' 'geosite.dat' "$TMPDIR/geosite.dat"
+
+mkdir -p "$V2RAY_DIR" "$RUNTIME_DIR"
+geoip_new="$V2RAY_DIR/.geoip.dat.new.$$"
+geosite_new="$V2RAY_DIR/.geosite.dat.new.$$"
+geoip_old="$V2RAY_DIR/.geoip.dat.old.$$"
+geosite_old="$V2RAY_DIR/.geosite.dat.old.$$"
+had_geoip=0
+had_geosite=0
+cp "$TMPDIR/geoip.dat" "$geoip_new"
+cp "$TMPDIR/geosite.dat" "$geosite_new"
+chmod 0644 "$geoip_new" "$geosite_new"
+
+[ ! -f "$V2RAY_DIR/geoip.dat" ] || { cp "$V2RAY_DIR/geoip.dat" "$geoip_old"; had_geoip=1; }
+[ ! -f "$V2RAY_DIR/geosite.dat" ] || { cp "$V2RAY_DIR/geosite.dat" "$geosite_old"; had_geosite=1; }
+
+# MosDNS is the only runtime consumer of these paths. Stop it across the two
+# renames so no query can observe a mixed GeoIP/GeoSite generation.
+if [ -x "$MOSDNS_INIT" ] && "$MOSDNS_INIT" running >/dev/null 2>&1; then
+	"$MOSDNS_INIT" stop
+	SERVICE_STOPPED=1
+fi
+if ! mv "$geoip_new" "$V2RAY_DIR/geoip.dat" || \
+	! mv "$geosite_new" "$V2RAY_DIR/geosite.dat"; then
+	if [ "$had_geoip" = '0' ]; then
+		rm -f "$V2RAY_DIR/geoip.dat"
+	else
+		mv "$geoip_old" "$V2RAY_DIR/geoip.dat"
+	fi
+	if [ "$had_geosite" = '0' ]; then
+		rm -f "$V2RAY_DIR/geosite.dat"
+	else
+		mv "$geosite_old" "$V2RAY_DIR/geosite.dat"
+	fi
+	fail 'failed to install MosDNS datasets; restored previous files'
+fi
+
+if ! "$MOSDNS_HELPER" v2dat_dump; then
+	if [ "$had_geoip" = '0' ]; then
+		rm -f "$V2RAY_DIR/geoip.dat"
+	else
+		mv "$geoip_old" "$V2RAY_DIR/geoip.dat"
+	fi
+	if [ "$had_geosite" = '0' ]; then
+		rm -f "$V2RAY_DIR/geosite.dat"
+	else
+		mv "$geosite_old" "$V2RAY_DIR/geosite.dat"
+	fi
+	"$MOSDNS_HELPER" v2dat_dump >/dev/null 2>&1 || true
+	fail 'MosDNS geodata export failed; restored previous datasets'
+fi
+
+rm -f "$geoip_old" "$geosite_old"
+if [ "$SERVICE_STOPPED" = '1' ]; then
+	"$MOSDNS_INIT" start
+	SERVICE_STOPPED=0
+fi
+log 'MosDNS geodata update completed'
+printf '%s\n' 'Verified MosDNS geodata update completed.'

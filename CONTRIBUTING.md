@@ -12,7 +12,10 @@ shellcheck files/etc/uci-defaults/99-bypass-router.sh \
   files/usr/sbin/bypass-router-configure \
   files/usr/sbin/bypass-router-cutover \
   files/usr/sbin/bypass-router-harden \
-  files/usr/share/luci-app-daede/daed-filter-sync.sh
+  files/usr/sbin/bypass-router-daed-configure \
+  files/usr/share/luci-app-daede/daed-filter-sync.sh \
+  files/usr/local/sbin/daed-subscription-sync \
+  files/usr/local/sbin/mosdns-geo-update-verified
 ```
 
 Changes to download sources, package lists, signature handling, GitHub Actions permissions, Release naming, OVF generation, or cleanup behavior are security-sensitive. Explain the source and risk impact in the pull request.
