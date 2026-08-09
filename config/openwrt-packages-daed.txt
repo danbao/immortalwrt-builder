@@ -42,6 +42,8 @@ collectd-mod-memory
 collectd-mod-ping
 collectd-mod-uptime
 collectd-mod-iptables
+luci-app-nlbwmon
+luci-i18n-nlbwmon-zh-cn
 
 # Diagnostics and filesystems
 ip-full

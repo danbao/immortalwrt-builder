@@ -60,13 +60,13 @@ uci -q set firewall.bypass_mgmt_allow.name='Allow-bypass-router-management'
 uci -q set firewall.bypass_mgmt_allow.src='lan'
 uci -q set "firewall.bypass_mgmt_allow.src_ip=${trusted_cidr}"
 uci -q set firewall.bypass_mgmt_allow.proto='tcp'
-uci -q set firewall.bypass_mgmt_allow.dest_port='22 80 443 2023'
+uci -q set firewall.bypass_mgmt_allow.dest_port='22 80 443 2023 1688'
 uci -q set firewall.bypass_mgmt_allow.target='ACCEPT'
 uci -q set firewall.bypass_mgmt_reject='rule'
 uci -q set firewall.bypass_mgmt_reject.name='Reject-untrusted-management'
 uci -q set firewall.bypass_mgmt_reject.src='lan'
 uci -q set firewall.bypass_mgmt_reject.proto='tcp'
-uci -q set firewall.bypass_mgmt_reject.dest_port='22 80 443 2023'
+uci -q set firewall.bypass_mgmt_reject.dest_port='22 80 443 2023 1688'
 uci -q set firewall.bypass_mgmt_reject.target='REJECT'
 uci -q commit firewall
 
@@ -81,6 +81,15 @@ fi
 if uci -q get daed.config >/dev/null; then
 	uci -q set "daed.config.listen_addr=${staging_ip}:2023"
 	uci -q commit daed
+fi
+if uci -q get mosdns.config >/dev/null; then
+	uci -q set mosdns.config.listen_address='127.0.0.1'
+	uci -q commit mosdns
+fi
+if uci -q get nlbwmon.@nlbwmon[0] >/dev/null 2>&1; then
+	uci -q delete nlbwmon.@nlbwmon[0].local_network
+	uci -q add_list "nlbwmon.@nlbwmon[0].local_network=${trusted_cidr}"
+	uci -q commit nlbwmon
 fi
 
 printf 'Applying staging address %s. Reconnect after the network reload.\n' "$staging_ip"

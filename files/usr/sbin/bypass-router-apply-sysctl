@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -eu
+
+sysctl -e -p "/etc/sysctl.d/99-bypass-router.conf" >/dev/null
+
+for task_sysctl_file in "/proc/sys/net/ipv4/conf/"*/accept_redirects \
+	"/proc/sys/net/ipv4/conf/"*/send_redirects; do
+	[ -e "$task_sysctl_file" ] && printf '0\n' > "$task_sysctl_file"
+done
+
+for task_sysctl_file in "/proc/sys/net/ipv6/conf/"*/accept_redirects; do
+	[ -e "$task_sysctl_file" ] && printf '0\n' > "$task_sysctl_file"
+done

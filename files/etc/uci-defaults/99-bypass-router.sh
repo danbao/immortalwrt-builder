@@ -82,6 +82,18 @@ for service in zerotier miniupnpd; do
 	fi
 done
 
+if [ -x "/etc/init.d/tailscale" ]; then
+	"/etc/init.d/tailscale" disable
+	"/etc/init.d/tailscale" stop >/dev/null 2>&1 || true
+fi
+
+if [ -x "/etc/init.d/bypass-router-hardening" ]; then
+	"/etc/init.d/bypass-router-hardening" enable
+fi
+
+updater_cron="30 4 * * * '/usr/sbin/immortalwrt-updater' check --refresh >'/tmp/immortalwrt-updater-cron.log' 2>&1"
+grep -Fqx "$updater_cron" "/etc/crontabs/root" 2>/dev/null || printf '%s\n' "$updater_cron" >> "/etc/crontabs/root"
+
 if ! uci -q get network.globals >/dev/null; then
 	uci -q set network.globals='globals'
 fi

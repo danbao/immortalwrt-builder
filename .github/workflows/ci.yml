@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  IB_VERSION: "25.12.1"
+  IB_TARGET: x86/64
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -25,10 +29,44 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Download verified ucode compiler
+        run: |
+          python3 scripts/openwrt_build_preflight.py imagebuilder-info \
+            --version "${IB_VERSION}" \
+            --target "${IB_TARGET}" \
+            --github-env "${GITHUB_ENV}" \
+            --retries 8 \
+            --timeout 30
+          # shellcheck disable=SC1090
+          source "${GITHUB_ENV}"
+          python3 scripts/openwrt_build_preflight.py download-url \
+            --url "${IB_BASE_URL}/${IB_ARCHIVE}" \
+            --output "${IB_ARCHIVE}" \
+            --sha256 "${IB_ARCHIVE_SHA256}" \
+            --retries 8 \
+            --timeout 300
+          mkdir -p ".ci-tools"
+          archive_root="immortalwrt-imagebuilder-${IB_VERSION}-${IB_TARGET//\//-}.Linux-x86_64"
+          tar --zstd -xf "${IB_ARCHIVE}" --strip-components=4 -C ".ci-tools" \
+            "${archive_root}/staging_dir/host/bin/ucode"
+          test -x ".ci-tools/ucode"
+          echo "UCODE_BIN=${GITHUB_WORKSPACE}/.ci-tools/ucode" >> "${GITHUB_ENV}"
+
       - name: Validate Python
         run: |
           python3 -m py_compile scripts/*.py
           python3 -m unittest discover -s tests
+
+      - name: Validate ucode
+        run: |
+          "${UCODE_BIN}" -c files/usr/libexec/immortalwrt-updater-plan.uc
+          "${UCODE_BIN}" -c files/usr/share/rpcd/ucode/immortalwrt-updater.uc
+
+      - name: Validate LuCI and RPC data
+        run: |
+          node --check files/www/luci-static/resources/view/system/immortalwrt-updater.js
+          jq empty files/usr/share/rpcd/acl.d/immortalwrt-updater.json \
+            files/usr/share/luci/menu.d/immortalwrt-updater.json
 
       - name: Validate workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
@@ -39,7 +77,11 @@ jobs:
           sudo apt-get install -y shellcheck
           shellcheck \
             files/etc/uci-defaults/99-bypass-router.sh \
+            files/etc/hotplug.d/iface/99-bypass-router-hardening \
+            files/etc/init.d/bypass-router-hardening \
             files/usr/sbin/bypass-router-configure \
             files/usr/sbin/bypass-router-cutover \
             files/usr/sbin/bypass-router-harden \
+            files/usr/sbin/bypass-router-apply-sysctl \
+            files/usr/sbin/immortalwrt-updater \
             files/usr/share/luci-app-daede/daed-filter-sync.sh

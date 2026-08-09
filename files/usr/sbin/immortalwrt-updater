@@ -1,0 +1,126 @@
+#!/bin/sh
+
+set -eu
+umask 077
+
+REPOSITORY='danbao/immortalwrt-builder'
+API_URL="https://api.github.com/repos/${REPOSITORY}/releases?per_page=30"
+MAX_IMAGE_SIZE=268435456
+WORK_DIR="${IMMORTALWRT_UPDATER_WORK_DIR:-/tmp/immortalwrt-updater}"
+PLAN_HELPER="${IMMORTALWRT_UPDATER_PLAN_HELPER:-/usr/libexec/immortalwrt-updater-plan.uc}"
+RELEASES="${WORK_DIR}/releases.json"
+SELECTION="${WORK_DIR}/selection.json"
+METADATA="${WORK_DIR}/build-metadata.json"
+PLAN="${WORK_DIR}/plan.json"
+IMAGE="${WORK_DIR}/firmware.img.gz"
+CHECKSUM="${WORK_DIR}/firmware.img.gz.sha256"
+VERIFIED="${WORK_DIR}/verified-identity"
+
+fail() {
+	printf 'ERROR: %s\n' "$*" >&2
+	exit 1
+}
+
+json_value() {
+	jsonfilter -i "$1" -e "@.$2"
+}
+
+sha256_of() {
+	sha256sum "$1" | awk '{print $1}'
+}
+
+require_sha256() {
+	file="$1"
+	expected="$2"
+	actual="$(sha256_of "$file")"
+	[ "$actual" = "$expected" ] || fail "SHA256 mismatch for $(basename "$file")"
+}
+
+refresh_plan() {
+	mkdir -p "$WORK_DIR"
+	curl -fL --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
+		-H 'Accept: application/vnd.github+json' "$API_URL" -o "$RELEASES"
+	"$PLAN_HELPER" select "$RELEASES" > "$SELECTION"
+	metadata_url="$(json_value "$SELECTION" metadataUrl)"
+	metadata_digest="$(json_value "$SELECTION" metadataDigest)"
+	metadata_sha256="${metadata_digest#sha256:}"
+	[ "${#metadata_sha256}" -eq 64 ] || fail 'invalid metadata digest'
+	case "$metadata_sha256" in *[!0-9a-f]*) fail 'invalid metadata digest' ;; esac
+	curl -fL --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
+		"$metadata_url" -o "$METADATA"
+	require_sha256 "$METADATA" "$metadata_sha256"
+	installed_published="$(uci -q get immortalwrt_updater.state.published_at 2>/dev/null || true)"
+	"$PLAN_HELPER" validate "$RELEASES" "$METADATA" "$installed_published" > "$PLAN"
+	rm -f "$VERIFIED"
+}
+
+verify_files() {
+	[ -s "$PLAN" ] && [ -s "$IMAGE" ] && [ -s "$CHECKSUM" ] \
+		|| fail 'downloaded firmware set is incomplete'
+	image_size="$(json_value "$PLAN" imageSize)"
+	[ "$image_size" -gt 0 ] && [ "$image_size" -le "$MAX_IMAGE_SIZE" ] \
+		|| fail 'firmware image size is outside the allowed range'
+	[ "$(wc -c < "$IMAGE")" -eq "$image_size" ] || fail 'firmware image size changed during download'
+	image_digest="$(json_value "$PLAN" imageDigest)"
+	checksum_digest="$(json_value "$PLAN" checksumDigest)"
+	expected="$(json_value "$METADATA" release.image_sha256)"
+	checksum_expected="$(awk 'NR == 1 {print $1}' "$CHECKSUM")"
+	[ "$checksum_expected" = "$expected" ] || fail 'release checksum disagrees with metadata'
+	require_sha256 "$CHECKSUM" "${checksum_digest#sha256:}"
+	require_sha256 "$IMAGE" "${image_digest#sha256:}"
+	require_sha256 "$IMAGE" "$expected"
+	sysupgrade -T "$IMAGE" || fail 'sysupgrade rejected the firmware image'
+	json_value "$PLAN" identity > "$VERIFIED"
+}
+
+download() {
+	refresh_plan
+	[ "$(json_value "$PLAN" updateAvailable)" = 'true' ] || fail 'latest trusted firmware is already installed'
+	image_size="$(json_value "$PLAN" imageSize)"
+	available_bytes="$(( $(df -k "$WORK_DIR" | awk 'NR == 2 {print $4}') * 1024 ))"
+	[ "$available_bytes" -gt "$((image_size + 33554432))" ] || fail 'not enough temporary space for firmware verification'
+	curl -fL --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 300 \
+		"$(json_value "$PLAN" imageUrl)" -o "$IMAGE"
+	curl -fL --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
+		"$(json_value "$PLAN" checksumUrl)" -o "$CHECKSUM"
+	verify_files
+}
+
+case "${1:-}" in
+	status)
+		[ "$#" -eq 1 ] || fail "usage: $0 status"
+		"$PLAN_HELPER" status "$PLAN" "$VERIFIED"
+	;;
+	check)
+		[ "$#" -eq 1 ] || [ "$#" -eq 2 ] && [ "$2" = '--refresh' ] \
+			|| fail "usage: $0 check [--refresh]"
+		if [ "${2:-}" = '--refresh' ] || [ ! -s "$PLAN" ]; then
+			refresh_plan
+		fi
+		"$PLAN_HELPER" status "$PLAN" "$VERIFIED"
+	;;
+	download)
+		[ "$#" -eq 1 ] || fail "usage: $0 download"
+		download
+		"$PLAN_HELPER" status "$PLAN" "$VERIFIED"
+	;;
+	verify)
+		[ "$#" -eq 1 ] || fail "usage: $0 verify"
+		verify_files
+		"$PLAN_HELPER" status "$PLAN" "$VERIFIED"
+	;;
+	upgrade)
+		[ "${2:-}" = '--snapshot-confirmed' ] && [ "$#" -eq 2 ] \
+			|| fail "usage: $0 upgrade --snapshot-confirmed"
+		download
+		uci -q set immortalwrt_updater.state='state'
+		uci -q set "immortalwrt_updater.state.release_tag=$(json_value "$PLAN" tag)"
+		uci -q set "immortalwrt_updater.state.published_at=$(json_value "$PLAN" publishedAt)"
+		uci -q set "immortalwrt_updater.state.identity=$(json_value "$PLAN" identity)"
+		uci -q commit immortalwrt_updater
+		sysupgrade "$IMAGE"
+	;;
+	*)
+		fail "usage: $0 {status|check [--refresh]|download|verify|upgrade --snapshot-confirmed}"
+	;;
+esac
