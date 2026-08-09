@@ -108,8 +108,9 @@ fi
 pidof daed >/dev/null 2>&1 || fail 'daed is not running'
 USERNAME="$(uci -q get daed.config.dashboard_username 2>/dev/null || true)"
 PASSWORD="$(uci -q get daed.config.dashboard_password 2>/dev/null || true)"
-[ -n "$USERNAME" ] && [ -n "$PASSWORD" ] \
-	|| fail 'configure daed credentials in LuCI first'
+if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+	fail 'configure daed credentials in LuCI first'
+fi
 [ -x "$OBJECT_ID_HELPER" ] || fail 'daed object lookup helper is missing'
 [ -x "$SYNC_COMMAND" ] || fail 'daed subscription sync command is missing'
 

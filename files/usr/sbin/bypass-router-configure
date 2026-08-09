@@ -59,7 +59,12 @@ esac
 
 old_ifs="$IFS"
 IFS=','
+# The unquoted expansion deliberately splits the validated comma-separated list.
+# Disable pathname expansion so a port such as '*' cannot turn into filenames.
+set -f
+# shellcheck disable=SC2086
 set -- $bridge_ports
+set +f
 IFS="$old_ifs"
 [ "$#" -ge 2 ] || fail 'at least two bridge ports are required'
 for port in "$@"; do

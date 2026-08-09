@@ -137,7 +137,9 @@ esac
 GRAPHQL_URL="http://${LISTEN_ADDR}/graphql"
 USERNAME="$(uci -q get daed.config.dashboard_username 2>/dev/null || true)"
 PASSWORD="$(uci -q get daed.config.dashboard_password 2>/dev/null || true)"
-[ -n "$USERNAME" ] && [ -n "$PASSWORD" ] || fail 'missing daed dashboard credentials'
+if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+	fail 'missing daed dashboard credentials'
+fi
 
 login_body="$TMPDIR/login-body.json"
 login_response="$TMPDIR/login-response.json"
@@ -156,7 +158,9 @@ meta="$TMPDIR/subscription-meta.json"
 	|| fail 'failed to find exactly one configured subscription'
 SUB_ID="$(jsonfilter -i "$meta" -e '@.id')"
 SOURCE_URL="$(jsonfilter -i "$meta" -e '@.link')"
-[ -n "$SUB_ID" ] && [ -n "$SOURCE_URL" ] || fail 'subscription metadata is incomplete'
+if [ -z "$SUB_ID" ] || [ -z "$SOURCE_URL" ]; then
+	fail 'subscription metadata is incomplete'
+fi
 
 case "$SOURCE_URL" in
 	https://*) source_port=443 ;;
