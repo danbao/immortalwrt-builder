@@ -55,11 +55,13 @@ refresh_plan() {
 }
 
 verify_files() {
-	[ -s "$PLAN" ] && [ -s "$IMAGE" ] && [ -s "$CHECKSUM" ] \
-		|| fail 'downloaded firmware set is incomplete'
+	if ! { [ -s "$PLAN" ] && [ -s "$IMAGE" ] && [ -s "$CHECKSUM" ]; }; then
+		fail 'downloaded firmware set is incomplete'
+	fi
 	image_size="$(json_value "$PLAN" imageSize)"
-	[ "$image_size" -gt 0 ] && [ "$image_size" -le "$MAX_IMAGE_SIZE" ] \
-		|| fail 'firmware image size is outside the allowed range'
+	if [ "$image_size" -le 0 ] || [ "$image_size" -gt "$MAX_IMAGE_SIZE" ]; then
+		fail 'firmware image size is outside the allowed range'
+	fi
 	[ "$(wc -c < "$IMAGE")" -eq "$image_size" ] || fail 'firmware image size changed during download'
 	image_digest="$(json_value "$PLAN" imageDigest)"
 	checksum_digest="$(json_value "$PLAN" checksumDigest)"
@@ -92,8 +94,11 @@ case "${1:-}" in
 		"$PLAN_HELPER" status "$PLAN" "$VERIFIED"
 	;;
 	check)
-		[ "$#" -eq 1 ] || [ "$#" -eq 2 ] && [ "$2" = '--refresh' ] \
-			|| fail "usage: $0 check [--refresh]"
+		case "$#" in
+			1) ;;
+			2) [ "$2" = '--refresh' ] || fail "usage: $0 check [--refresh]" ;;
+			*) fail "usage: $0 check [--refresh]" ;;
+		esac
 		if [ "${2:-}" = '--refresh' ] || [ ! -s "$PLAN" ]; then
 			refresh_plan
 		fi
@@ -110,8 +115,9 @@ case "${1:-}" in
 		"$PLAN_HELPER" status "$PLAN" "$VERIFIED"
 	;;
 	upgrade)
-		[ "${2:-}" = '--snapshot-confirmed' ] && [ "$#" -eq 2 ] \
-			|| fail "usage: $0 upgrade --snapshot-confirmed"
+		if [ "$#" -ne 2 ] || [ "$2" != '--snapshot-confirmed' ]; then
+			fail "usage: $0 upgrade --snapshot-confirmed"
+		fi
 		download
 		uci -q set immortalwrt_updater.state='state'
 		uci -q set "immortalwrt_updater.state.release_tag=$(json_value "$PLAN" tag)"
