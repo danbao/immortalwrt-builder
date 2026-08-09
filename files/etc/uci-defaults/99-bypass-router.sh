@@ -1,5 +1,8 @@
 #!/bin/sh
 
+INIT_DIR="${BYPASS_INIT_DIR:-/etc/init.d}"
+CRONTAB="${BYPASS_CRONTAB:-/etc/crontabs/root}"
+
 # Prepare the two-link bridge. Site-specific addresses are applied from the VM
 # console with bypass-router-configure and are never baked into the image.
 uci -q set network.lan.device='br-lan'
@@ -29,6 +32,51 @@ uci -q set firewall.@defaults[0].flow_offloading='0'
 uci -q set firewall.@defaults[0].flow_offloading_hw='0'
 
 uci -q commit firewall
+
+# Public DNS defaults. Site addresses and credentials remain runtime-only.
+if uci -q get mosdns.config >/dev/null; then
+	uci -q set mosdns.config.enabled='1'
+	uci -q set mosdns.config.listen_address='127.0.0.1'
+	uci -q set mosdns.config.listen_port='5335'
+	uci -q set mosdns.config.listen_port_api='9091'
+	uci -q set mosdns.config.custom_local_dns='1'
+	uci -q delete mosdns.config.local_dns
+	uci -q add_list mosdns.config.local_dns='223.5.5.5'
+	uci -q add_list mosdns.config.local_dns='119.29.29.29'
+	uci -q delete mosdns.config.remote_dns
+	uci -q add_list mosdns.config.remote_dns='https://dns.google/dns-query'
+	uci -q add_list mosdns.config.remote_dns='https://dns11.quad9.net/dns-query'
+	uci -q set mosdns.config.bootstrap_dns='119.29.29.29'
+	uci -q set mosdns.config.cache='1'
+	uci -q set mosdns.config.cache_size='8000'
+	uci -q set mosdns.config.lazy_cache_ttl='86400'
+	uci -q set mosdns.config.prefer_ipv4='1'
+	uci -q set mosdns.config.insecure_skip_verify='0'
+	uci -q set mosdns.config.redirect='1'
+	# A single verified updater is installed below; disable MosDNS' duplicate cron.
+	uci -q set mosdns.config.geo_auto_update='0'
+	uci -q commit mosdns
+
+	uci -q delete 'dhcp.@dnsmasq[0].server'
+	uci -q add_list 'dhcp.@dnsmasq[0].server=127.0.0.1#5335'
+	uci -q commit dhcp
+
+	mkdir -p "$(dirname "$CRONTAB")"
+	cron_tmp="$(mktemp "${CRONTAB}.XXXXXX")" || exit 1
+	if [ -f "$CRONTAB" ]; then
+		sed '/\/usr\/share\/mosdns\/mosdns\.uc update/d;/mosdns-geo-update-verified/d' \
+			"$CRONTAB" > "$cron_tmp"
+	fi
+	printf '%s\n' '0 3 * * 0 /usr/local/sbin/mosdns-geo-update-verified >/tmp/mosdns-geo-update.log 2>&1 # verified MosDNS geodata' \
+		>> "$cron_tmp"
+	mv "$cron_tmp" "$CRONTAB"
+fi
+
+for service in mosdns dnsmasq daed; do
+	if [ -x "${INIT_DIR}/${service}" ]; then
+		"${INIT_DIR}/${service}" enable
+	fi
+done
 
 # Ensure irqbalance auto-starts (package is preinstalled) to spread softirq/NIC
 # interrupts across CPU cores.
@@ -75,24 +123,20 @@ fi
 
 # These services are deliberately absent from the package profile. Disable any
 # copy inherited from a future base image as a defense-in-depth measure.
-for service in zerotier miniupnpd; do
-	if [ -x "/etc/init.d/${service}" ]; then
-		"/etc/init.d/${service}" disable
-		"/etc/init.d/${service}" stop >/dev/null 2>&1 || true
+for service in zerotier miniupnpd tailscale; do
+	if [ -x "${INIT_DIR}/${service}" ]; then
+		"${INIT_DIR}/${service}" disable
+		"${INIT_DIR}/${service}" stop >/dev/null 2>&1 || true
 	fi
 done
 
-if [ -x "/etc/init.d/tailscale" ]; then
-	"/etc/init.d/tailscale" disable
-	"/etc/init.d/tailscale" stop >/dev/null 2>&1 || true
-fi
-
-if [ -x "/etc/init.d/bypass-router-hardening" ]; then
-	"/etc/init.d/bypass-router-hardening" enable
+if [ -x "${INIT_DIR}/bypass-router-hardening" ]; then
+	"${INIT_DIR}/bypass-router-hardening" enable
 fi
 
 updater_cron="30 4 * * * '/usr/sbin/immortalwrt-updater' check --refresh >'/tmp/immortalwrt-updater-cron.log' 2>&1"
-grep -Fqx "$updater_cron" "/etc/crontabs/root" 2>/dev/null || printf '%s\n' "$updater_cron" >> "/etc/crontabs/root"
+mkdir -p "$(dirname "$CRONTAB")"
+grep -Fqx "$updater_cron" "$CRONTAB" 2>/dev/null || printf '%s\n' "$updater_cron" >> "$CRONTAB"
 
 if ! uci -q get network.globals >/dev/null; then
 	uci -q set network.globals='globals'
