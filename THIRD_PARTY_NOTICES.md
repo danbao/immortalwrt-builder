@@ -16,12 +16,16 @@ Primary upstream projects include:
 | LuCI MosDNS | https://github.com/sbwml/luci-app-mosdns | GPL-3.0 |
 | OpenWrt daed/daede | https://github.com/kenzok8/openwrt-daede | AGPL-3.0 |
 | vmlinux BTF package | https://github.com/kenzok8/openwrt-daede | GPL-2.0-only |
+| Loyalsoldier GeoIP runtime data | https://github.com/Loyalsoldier/geoip | CC-BY-SA-4.0 or GPL-3.0 |
+| Loyalsoldier v2ray-rules-dat runtime data | https://github.com/Loyalsoldier/v2ray-rules-dat | GPL-3.0 |
 
 This list is not a replacement for the package-level notices. Every Release includes the exact package versions, commit- or tag-pinned source locations, downloadable source archive URLs, source paths, and SPDX identifiers generated from the actual build manifest. Missing license or exact source metadata blocks publication.
 
 The pinned archives, this repository's complete build scripts, and the recorded ImageBuilder/feed revisions are the documented network source-acquisition method for each published build. Recipients must follow the license terms of each component when redistributing firmware; the repository's MIT license does not relicense firmware components.
 
 Some third-party feeds do not publish a cryptographically verifiable package-to-source-commit attestation. In those cases the build records an immutable source snapshot as `artifact_source_relation: unverified-upstream`; this is an explicit residual-risk disclosure, not a claim that the snapshot is proven to be the exact source used by upstream.
+
+The MosDNS runtime updater downloads the two Loyalsoldier datasets above from GitHub Releases. It requires GitHub's release-asset SHA256 digest and keeps the previously installed datasets when either download or validation fails. These runtime downloads are not build artifacts and therefore are not listed in a firmware Release's package SBOM.
 
 The reviewed bnx2 and i915 notices above apply to linux-firmware version `20260221`. The metadata generator requires the corresponding installed package versions to match `20260221-*`; a future ImageBuilder update is blocked until its firmware source and license records are reviewed and updated.
 

@@ -1,0 +1,214 @@
+#!/bin/sh
+# shellcheck shell=dash
+# GraphQL variables intentionally use literal dollar signs in single quotes.
+# shellcheck disable=SC2016
+
+set -eu
+umask 077
+
+FILTER_SYNC="${DAED_FILTER_SYNC:-/usr/share/luci-app-daede/daed-filter-sync.sh}"
+META_HELPER="${DAED_META_HELPER:-/usr/share/luci-app-daede/daed-subscription-meta.uc}"
+LOG="${DAED_SYNC_LOG:-/tmp/daed-subscription-sync.log}"
+LOCK="${DAED_SYNC_LOCK:-/tmp/daed-subscription-sync.lock}"
+TMPDIR=''
+STAGE_FILE=''
+TOKEN=''
+SUB_ID=''
+SOURCE_URL=''
+GRAPHQL_URL=''
+RESTORE_LINK=0
+
+log() {
+	printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"
+}
+
+fail() {
+	log "ERROR: $*"
+	printf 'ERROR: %s\n' "$*" >&2
+	exit 1
+}
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+post_graphql() {
+	local body="$1"
+	local output="$2"
+	local auth="${3:-}"
+
+	if [ -n "$auth" ]; then
+		printf 'header = "Authorization: Bearer %s"\n' "$auth" | \
+			curl --config - --max-time 90 -fsS "$GRAPHQL_URL" \
+				-H 'Content-Type: application/json' \
+				--data-binary "@$body" > "$output"
+	else
+		curl --max-time 30 -fsS "$GRAPHQL_URL" \
+			-H 'Content-Type: application/json' \
+			--data-binary "@$body" > "$output"
+	fi
+}
+
+graphql_checked() {
+	local body="$1"
+	local output="$2"
+	post_graphql "$body" "$output" "$TOKEN" || fail 'daed GraphQL request failed'
+	if grep -q '"errors"' "$output"; then
+		fail 'daed GraphQL returned an error'
+	fi
+}
+
+run_mutation() {
+	local name="$1"
+	local query="$2"
+	local variables="$3"
+	local body="$TMPDIR/${name}-body.json"
+	local output="$TMPDIR/${name}-response.json"
+	printf '{"query":"%s","variables":%s}' "$query" "$variables" > "$body"
+	graphql_checked "$body" "$output"
+}
+
+write_link_body() {
+	local output="$1"
+	local link="$2"
+	printf '{"query":"mutation Link($id:ID!,$link:String!){updateSubscriptionLink(id:$id,link:$link){id tag}}","variables":{"id":"%s","link":"%s"}}' \
+		"$(json_escape "$SUB_ID")" "$(json_escape "$link")" > "$output"
+}
+
+restore_subscription_link() {
+	local body
+	local output
+	[ "$RESTORE_LINK" = '1' ] || return 0
+	[ -n "$TMPDIR" ] && [ -n "$SOURCE_URL" ] && [ -n "$SUB_ID" ] || return 0
+	body="$TMPDIR/restore-link-body.json"
+	output="$TMPDIR/restore-link-response.json"
+	write_link_body "$body" "$SOURCE_URL"
+	if post_graphql "$body" "$output" "$TOKEN" && ! grep -q '"errors"' "$output"; then
+		RESTORE_LINK=0
+		log 'restored subscription source link'
+	else
+		log 'ERROR: failed to restore subscription source link'
+	fi
+}
+
+cleanup() {
+	restore_subscription_link || true
+	[ -z "$STAGE_FILE" ] || rm -f "$STAGE_FILE"
+	[ -z "$TMPDIR" ] || rm -rf "$TMPDIR"
+	rmdir "$LOCK" 2>/dev/null || true
+}
+
+valid_ipv4() {
+	awk -F. '
+		NF != 4 { exit 1 }
+		{ for (i = 1; i <= 4; i++) if ($i !~ /^[0-9]+$/ || $i > 255) exit 1 }
+	' <<EOF
+$1
+EOF
+}
+
+SUBSCRIPTION_TAG="$(uci -q get bypass_router.daed.subscription_tag)" \
+	|| fail 'missing runtime subscription tag; run bypass-router-daed-configure first'
+GROUP_NAME="$(uci -q get bypass_router.daed.group 2>/dev/null || true)"
+[ -n "$GROUP_NAME" ] || GROUP_NAME='proxy'
+EXCLUDE_KEYWORD="$(uci -q get bypass_router.daed.exclude_keyword 2>/dev/null || true)"
+[ -n "$EXCLUDE_KEYWORD" ] || EXCLUDE_KEYWORD='备用'
+DIRECT_RESOLVER="$(uci -q get bypass_router.daed.direct_resolver 2>/dev/null || true)"
+if [ -z "$DIRECT_RESOLVER" ]; then
+	DIRECT_RESOLVER="$(uci -q get network.lan.dns 2>/dev/null | awk '{print $1}')"
+fi
+[ -n "$DIRECT_RESOLVER" ] || fail 'no direct resolver configured'
+valid_ipv4 "$DIRECT_RESOLVER" || fail 'direct resolver is not a valid IPv4 address'
+
+[ -x "$FILTER_SYNC" ] || fail 'filtered subscription sync helper is missing'
+[ -x "$META_HELPER" ] || fail 'subscription metadata helper is missing'
+pidof daed >/dev/null 2>&1 || fail 'daed is not running'
+mkdir "$LOCK" 2>/dev/null || fail 'daed subscription sync is already running'
+trap cleanup EXIT INT TERM
+TMPDIR="$(mktemp -d '/tmp/daed-subscription-sync.XXXXXX')" \
+	|| fail 'failed to create temporary directory'
+
+LISTEN_ADDR="$(uci -q get daed.config.listen_addr 2>/dev/null || true)"
+[ -n "$LISTEN_ADDR" ] || LISTEN_ADDR='127.0.0.1:2023'
+case "$LISTEN_ADDR" in
+	0.0.0.0:*) LISTEN_ADDR="127.0.0.1:${LISTEN_ADDR##*:}" ;;
+	\[::\]:*) LISTEN_ADDR="127.0.0.1:${LISTEN_ADDR##*:}" ;;
+esac
+GRAPHQL_URL="http://${LISTEN_ADDR}/graphql"
+USERNAME="$(uci -q get daed.config.dashboard_username 2>/dev/null || true)"
+PASSWORD="$(uci -q get daed.config.dashboard_password 2>/dev/null || true)"
+[ -n "$USERNAME" ] && [ -n "$PASSWORD" ] || fail 'missing daed dashboard credentials'
+
+login_body="$TMPDIR/login-body.json"
+login_response="$TMPDIR/login-response.json"
+printf '{"query":"query Token($username:String!,$password:String!){token(username:$username,password:$password)}","variables":{"username":"%s","password":"%s"}}' \
+	"$(json_escape "$USERNAME")" "$(json_escape "$PASSWORD")" > "$login_body"
+post_graphql "$login_body" "$login_response" || fail 'daed login request failed'
+TOKEN="$(jsonfilter -i "$login_response" -e '@.data.token')"
+[ -n "$TOKEN" ] || fail 'daed login failed'
+
+state_body="$TMPDIR/state-body.json"
+state="$TMPDIR/state.json"
+printf '%s' '{"query":"query SyncSource{subscriptions{id tag link}}"}' > "$state_body"
+graphql_checked "$state_body" "$state"
+meta="$TMPDIR/subscription-meta.json"
+"$META_HELPER" "$state" "$SUBSCRIPTION_TAG" > "$meta" \
+	|| fail 'failed to find exactly one configured subscription'
+SUB_ID="$(jsonfilter -i "$meta" -e '@.id')"
+SOURCE_URL="$(jsonfilter -i "$meta" -e '@.link')"
+[ -n "$SUB_ID" ] && [ -n "$SOURCE_URL" ] || fail 'subscription metadata is incomplete'
+
+case "$SOURCE_URL" in
+	https://*) source_port=443 ;;
+	http://*) source_port=80 ;;
+	*) fail 'subscription source must use HTTP or HTTPS' ;;
+esac
+source_authority="${SOURCE_URL#*://}"
+source_host="${source_authority%%[/:]*}"
+[ -n "$source_host" ] || fail 'failed to parse subscription source host'
+source_ip="$(nslookup "$source_host" "$DIRECT_RESOLVER" 2>/dev/null | \
+	awk '/^Address: / && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $2; exit }')"
+[ -n "$source_ip" ] || fail 'subscription source DNS resolution failed'
+
+stage_token="sync$(date +%s)$$"
+STAGE_FILE="/tmp/daede-daedsub-${stage_token}"
+curl -4 -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+	--connect-timeout 15 --max-time 90 \
+	--resolve "${source_host}:${source_port}:${source_ip}" \
+	-o "$STAGE_FILE" "$SOURCE_URL" || fail 'subscription source fetch failed'
+[ -s "$STAGE_FILE" ] || fail 'subscription source is empty'
+chmod 0600 "$STAGE_FILE"
+
+local_link="http://127.0.0.1/cgi-bin/daede-sub?t=${stage_token}"
+body="$TMPDIR/local-link-body.json"
+write_link_body "$body" "$local_link"
+graphql_checked "$body" "$TMPDIR/local-link-response.json"
+RESTORE_LINK=1
+
+update_body="$TMPDIR/update-subscription-body.json"
+update_response="$TMPDIR/update-subscription-response.json"
+printf '{"query":"mutation Update($id:ID!){updateSubscription(id:$id){id tag status}}","variables":{"id":"%s"}}' \
+	"$(json_escape "$SUB_ID")" > "$update_body"
+if ! post_graphql "$update_body" "$update_response" "$TOKEN"; then
+	restore_subscription_link
+	fail 'daed GraphQL request failed while updating the subscription'
+fi
+if grep -q '"errors"' "$update_response"; then
+	restore_subscription_link
+	fail 'daed rejected the staged subscription update'
+fi
+restore_subscription_link
+[ "$RESTORE_LINK" = '0' ] || fail 'failed to restore subscription source link'
+
+sync_output="$TMPDIR/filter-output.txt"
+DAED_SKIP_UPDATE=1 "$FILTER_SYNC" "$SUBSCRIPTION_TAG" "$GROUP_NAME" "$EXCLUDE_KEYWORD" \
+	> "$sync_output" || fail 'filtered subscription apply failed'
+sync_summary="$(sed -n 's/^Filtered subscription synced: //p' "$sync_output" | tail -n 1)"
+[ -n "$sync_summary" ] || fail 'filtered subscription returned no summary'
+
+run_mutation 'disable-built-in-cron' \
+	'mutation Cron($id:ID!,$exp:String!,$enable:Boolean!){updateSubscriptionCron(id:$id,cronExp:$exp,cronEnable:$enable){id tag}}' \
+	"{\"id\":\"$(json_escape "$SUB_ID")\",\"exp\":\"17 */6 * * *\",\"enable\":false}"
+
+log "sync complete tag=$SUBSCRIPTION_TAG group=$GROUP_NAME $sync_summary built-in-cron=disabled"
+printf '%s\n' "$sync_summary"

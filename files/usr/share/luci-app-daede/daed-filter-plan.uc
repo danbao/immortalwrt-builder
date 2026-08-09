@@ -50,6 +50,7 @@ let existingIds = [];
 let addIds = [];
 let staleIds = [];
 let subscriptionAttached = false;
+let subscriptionFilterRegex = '';
 
 for (let node in subscription.nodes.edges)
 	if (index(node.name ?? '', excludeKeyword) < 0 &&
@@ -68,8 +69,9 @@ for (let id in desiredIds)
 		push(addIds, id);
 
 for (let attached in group.subscriptions)
-	if (attached.id == subscription.id) {
+	if (attached.subscription?.id == subscription.id) {
 		subscriptionAttached = true;
+		subscriptionFilterRegex = attached.nameFilterRegex ?? '';
 		break;
 	}
 
@@ -77,6 +79,7 @@ print(sprintf('%J', {
 	subId: subscription.id,
 	groupId: group.id,
 	subscriptionAttached,
+	subscriptionFilterRegex,
 	desiredCount: length(desiredIds),
 	excludedCount: length(subscription.nodes.edges) - length(desiredIds),
 	addCount: length(addIds),

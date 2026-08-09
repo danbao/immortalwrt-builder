@@ -42,4 +42,7 @@ jobs:
             files/usr/sbin/bypass-router-configure \
             files/usr/sbin/bypass-router-cutover \
             files/usr/sbin/bypass-router-harden \
-            files/usr/share/luci-app-daede/daed-filter-sync.sh
+            files/usr/sbin/bypass-router-daed-configure \
+            files/usr/share/luci-app-daede/daed-filter-sync.sh \
+            files/usr/local/sbin/daed-subscription-sync \
+            files/usr/local/sbin/mosdns-geo-update-verified
