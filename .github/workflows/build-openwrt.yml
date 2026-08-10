@@ -41,8 +41,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext \
+          sudo apt-get install -y build-essential cmake libjson-c-dev libncurses-dev zlib1g-dev gawk git gettext \
             libssl-dev xsltproc rsync wget unzip python3 zstd qemu-utils shellcheck
+
+      - name: Build pinned ucode compiler
+        run: |
+          scripts/install-host-ucode.sh "${GITHUB_WORKSPACE}/.ci-tools"
+          echo "UCODE_BIN=${GITHUB_WORKSPACE}/.ci-tools/bin/ucode" >> "${GITHUB_ENV}"
 
       - name: Download verified ImageBuilder
         run: |
@@ -65,11 +70,11 @@ jobs:
 
       - name: Validate repository and updater
         run: |
-          export UCODE_BIN="${GITHUB_WORKSPACE}/imagebuilder/staging_dir/host/bin/ucode"
           test -x "${UCODE_BIN}"
           python3 -m py_compile scripts/*.py
           python3 -m unittest discover -s tests
-          shellcheck files/etc/uci-defaults/99-bypass-router.sh \
+          shellcheck scripts/install-host-ucode.sh \
+            files/etc/uci-defaults/99-bypass-router.sh \
             files/etc/hotplug.d/iface/99-bypass-router-hardening \
             files/etc/init.d/bypass-router-hardening \
             files/usr/sbin/bypass-router-configure \
@@ -77,7 +82,10 @@ jobs:
             files/usr/sbin/bypass-router-harden \
             files/usr/sbin/bypass-router-apply-sysctl \
             files/usr/sbin/immortalwrt-updater \
-            files/usr/share/luci-app-daede/daed-filter-sync.sh
+            files/usr/sbin/bypass-router-daed-configure \
+            files/usr/share/luci-app-daede/daed-filter-sync.sh \
+            files/usr/local/sbin/daed-subscription-sync \
+            files/usr/local/sbin/mosdns-geo-update-verified
           node --check files/www/luci-static/resources/view/system/immortalwrt-updater.js
           "${UCODE_BIN}" -c files/usr/libexec/immortalwrt-updater-plan.uc
           "${UCODE_BIN}" -c files/usr/share/rpcd/ucode/immortalwrt-updater.uc

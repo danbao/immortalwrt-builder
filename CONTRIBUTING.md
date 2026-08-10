@@ -8,7 +8,8 @@ Before opening a pull request, run:
 python3 -m py_compile scripts/*.py
 python3 -m unittest discover -s tests
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-shellcheck files/etc/uci-defaults/99-bypass-router.sh \
+shellcheck scripts/install-host-ucode.sh \
+  files/etc/uci-defaults/99-bypass-router.sh \
   files/etc/hotplug.d/iface/99-bypass-router-hardening \
   files/etc/init.d/bypass-router-hardening \
   files/usr/sbin/bypass-router-configure \
