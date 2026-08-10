@@ -206,6 +206,96 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "found 2"):
             preflight.select_release_asset(assets, "*")
 
+    def test_wait_for_release_asset_retries_empty_release(self) -> None:
+        asset = {"id": 7, "name": "luci-app-demo_1.apk"}
+        with (
+            mock.patch.object(
+                preflight,
+                "github_api_json",
+                side_effect=[{"id": 1, "assets": []}, {"id": 1, "assets": [asset]}],
+            ) as github_api,
+            mock.patch.object(preflight.time, "sleep") as sleep,
+        ):
+            release, selected = preflight.wait_for_release_asset(
+                "https://api.example.test/releases/latest",
+                "luci-app-demo_*.apk",
+                timeout=1,
+                retries=1,
+                attempts=2,
+                delay=10,
+            )
+
+        self.assertEqual(release["id"], 1)
+        self.assertEqual(selected, asset)
+        self.assertEqual(github_api.call_count, 2)
+        sleep.assert_called_once_with(10)
+
+    def test_wait_for_release_asset_fails_after_empty_release_timeout(self) -> None:
+        with (
+            mock.patch.object(
+                preflight,
+                "github_api_json",
+                return_value={"id": 1, "assets": []},
+            ) as github_api,
+            mock.patch.object(preflight.time, "sleep") as sleep,
+            self.assertRaisesRegex(ValueError, "found 0"),
+        ):
+            preflight.wait_for_release_asset(
+                "https://api.example.test/releases/latest",
+                "luci-app-demo_*.apk",
+                timeout=1,
+                retries=1,
+                attempts=3,
+                delay=10,
+            )
+
+        self.assertEqual(github_api.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_wait_for_release_asset_rejects_ambiguous_release_immediately(self) -> None:
+        assets = [
+            {"id": 7, "name": "luci-app-demo_1.apk"},
+            {"id": 8, "name": "luci-app-demo_2.apk"},
+        ]
+        with (
+            mock.patch.object(
+                preflight,
+                "github_api_json",
+                return_value={"id": 1, "assets": assets},
+            ) as github_api,
+            mock.patch.object(preflight.time, "sleep") as sleep,
+            self.assertRaisesRegex(ValueError, "found 2"),
+        ):
+            preflight.wait_for_release_asset(
+                "https://api.example.test/releases/latest",
+                "luci-app-demo_*.apk",
+                timeout=1,
+                retries=1,
+                attempts=3,
+                delay=10,
+            )
+
+        github_api.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_wait_for_release_asset_rejects_invalid_wait_settings(self) -> None:
+        for attempts, delay, message in (
+            (0, 10, "attempts must be at least 1"),
+            (1, -1, "delay must not be negative"),
+        ):
+            with self.subTest(attempts=attempts, delay=delay), self.assertRaisesRegex(
+                ValueError,
+                message,
+            ):
+                preflight.wait_for_release_asset(
+                    "https://api.example.test/releases/latest",
+                    "luci-app-demo_*.apk",
+                    timeout=1,
+                    retries=1,
+                    attempts=attempts,
+                    delay=delay,
+                )
+
     def test_parse_sha256sums_requires_one_archive_entry(self) -> None:
         payload = "abc123  immortalwrt-imagebuilder-24.10.6-x86-64.Linux-x86_64.tar.zst\n"
         self.assertEqual(
