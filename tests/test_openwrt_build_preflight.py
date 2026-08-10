@@ -215,6 +215,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
                 side_effect=[{"id": 1, "assets": []}, {"id": 1, "assets": [asset]}],
             ) as github_api,
             mock.patch.object(preflight.time, "sleep") as sleep,
+            mock.patch.object(preflight.sys, "stderr", io.StringIO()),
         ):
             release, selected = preflight.wait_for_release_asset(
                 "https://api.example.test/releases/latest",
@@ -238,6 +239,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
                 return_value={"id": 1, "assets": []},
             ) as github_api,
             mock.patch.object(preflight.time, "sleep") as sleep,
+            mock.patch.object(preflight.sys, "stderr", io.StringIO()),
             self.assertRaisesRegex(ValueError, "found 0"),
         ):
             preflight.wait_for_release_asset(
