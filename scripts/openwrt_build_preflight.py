@@ -252,6 +252,40 @@ def select_release_asset(assets: list[dict], pattern: str) -> dict:
     return matches[0]
 
 
+def wait_for_release_asset(
+    api_url: str,
+    pattern: str,
+    *,
+    timeout: int,
+    retries: int,
+    attempts: int,
+    delay: float,
+) -> tuple[dict, dict]:
+    if attempts < 1:
+        raise ValueError("release asset wait attempts must be at least 1")
+    if delay < 0:
+        raise ValueError("release asset wait delay must not be negative")
+    for attempt in range(1, attempts + 1):
+        release = github_api_json(api_url, timeout=timeout, retries=retries)
+        assets = release.get("assets", [])
+        matches = [
+            asset
+            for asset in assets
+            if fnmatch.fnmatch(str(asset.get("name", "")), pattern)
+        ]
+        if len(matches) == 1:
+            return release, matches[0]
+        if matches or attempt == attempts:
+            select_release_asset(assets, pattern)
+        print(
+            f"::notice::release asset matching {pattern} is not published yet; "
+            f"waiting {delay:g}s ({attempt}/{attempts})",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    raise AssertionError("release asset wait loop ended unexpectedly")
+
+
 def select_release_asset_by_id(assets: list[dict], asset_id: object) -> dict:
     matches = [asset for asset in assets if asset.get("id") == asset_id]
     if len(matches) != 1:
@@ -949,8 +983,14 @@ def cmd_check_feeds(args: argparse.Namespace) -> int:
 
 def cmd_download_release_asset(args: argparse.Namespace) -> int:
     api_url = release_api_url(args.repo, args.tag)
-    release = github_api_json(api_url, timeout=args.timeout, retries=args.retries)
-    asset = select_release_asset(release.get("assets", []), args.pattern)
+    release, asset = wait_for_release_asset(
+        api_url,
+        args.pattern,
+        timeout=args.timeout,
+        retries=args.retries,
+        attempts=args.asset_wait_attempts,
+        delay=args.asset_wait_delay,
+    )
     url = str(asset.get("url") or "")
     if not url:
         raise ValueError(f"release asset has no API download URL: {asset.get('name')}")
@@ -1118,6 +1158,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     download_asset.add_argument("--dir", type=Path, required=True)
     download_asset.add_argument("--provenance", type=Path)
     download_asset.add_argument("--allow-missing-digest", action="store_true")
+    download_asset.add_argument("--asset-wait-attempts", type=int, default=1)
+    download_asset.add_argument("--asset-wait-delay", type=float, default=10)
     add_common_network_args(download_asset)
     download_asset.set_defaults(func=cmd_download_release_asset)
 

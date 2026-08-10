@@ -132,6 +132,8 @@ jobs:
               --dir "$3" \
               --provenance "${GITHUB_WORKSPACE}/dist/metadata/upstream-provenance.json" \
               --allow-missing-digest \
+              --asset-wait-attempts 30 \
+              --asset-wait-delay 10 \
               --retries 8 \
               --timeout "$4"
           }
