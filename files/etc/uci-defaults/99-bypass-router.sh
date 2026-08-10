@@ -36,7 +36,7 @@ uci -q commit firewall
 # Public DNS defaults. Site addresses and credentials remain runtime-only.
 if uci -q get mosdns.config >/dev/null; then
 	uci -q set mosdns.config.enabled='1'
-	uci -q set mosdns.config.listen_address='0.0.0.0'
+	uci -q set mosdns.config.listen_address='127.0.0.1'
 	uci -q set mosdns.config.listen_port='5335'
 	uci -q set mosdns.config.listen_port_api='9091'
 	uci -q set mosdns.config.custom_local_dns='1'
@@ -45,7 +45,7 @@ if uci -q get mosdns.config >/dev/null; then
 	uci -q add_list mosdns.config.local_dns='119.29.29.29'
 	uci -q delete mosdns.config.remote_dns
 	uci -q add_list mosdns.config.remote_dns='https://dns.google/dns-query'
-	uci -q add_list mosdns.config.remote_dns='https://cloudflare-dns.com/dns-query'
+	uci -q add_list mosdns.config.remote_dns='https://dns11.quad9.net/dns-query'
 	uci -q set mosdns.config.bootstrap_dns='119.29.29.29'
 	uci -q set mosdns.config.cache='1'
 	uci -q set mosdns.config.cache_size='8000'
@@ -129,6 +129,14 @@ for service in zerotier miniupnpd tailscale; do
 		"${INIT_DIR}/${service}" stop >/dev/null 2>&1 || true
 	fi
 done
+
+if [ -x "${INIT_DIR}/bypass-router-hardening" ]; then
+	"${INIT_DIR}/bypass-router-hardening" enable
+fi
+
+updater_cron="30 4 * * * '/usr/sbin/immortalwrt-updater' check --refresh >'/tmp/immortalwrt-updater-cron.log' 2>&1"
+mkdir -p "$(dirname "$CRONTAB")"
+grep -Fqx "$updater_cron" "$CRONTAB" 2>/dev/null || printf '%s\n' "$updater_cron" >> "$CRONTAB"
 
 if ! uci -q get network.globals >/dev/null; then
 	uci -q set network.globals='globals'

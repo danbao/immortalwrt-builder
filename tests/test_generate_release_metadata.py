@@ -11,6 +11,42 @@ import generate_release_metadata as metadata
 
 
 class GenerateReleaseMetadataTests(unittest.TestCase):
+    def test_load_firmware_identity_requires_matching_flavor_and_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            path = Path(tmp_s) / "identity.json"
+            payload = {
+                "schema_version": 1,
+                "repository": "danbao/immortalwrt-builder",
+                "flavor": "daed",
+                "target": "x86/64",
+                "identity_sha256": "a" * 64,
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertEqual(metadata.load_firmware_identity(path, "daed"), payload)
+            with self.assertRaisesRegex(ValueError, "standard"):
+                metadata.load_firmware_identity(path, "standard")
+
+    def test_build_metadata_schema_rejects_wrong_target_and_release_family(self) -> None:
+        payload = {
+            "schema_version": 2,
+            "repository": "danbao/immortalwrt-builder",
+            "flavor": "daed",
+            "target": "x86/64",
+            "firmware_identity": {"flavor": "daed", "target": "x86/64"},
+            "release": {
+                "release_tag": "openwrt-immortalwrt-x86-64-daed-20260810-a-bbbbbbbbbbbb",
+                "image_sha256": "a" * 64,
+            },
+        }
+        metadata.validate_build_metadata(payload, "daed")
+        payload["target"] = "armsr/armv8"
+        with self.assertRaisesRegex(ValueError, "schema validation"):
+            metadata.validate_build_metadata(payload, "daed")
+        payload["target"] = "x86/64"
+        payload["release"]["release_tag"] = "openwrt-immortalwrt-x86-64-20260810-a-bbbbbbbbbbbb"
+        with self.assertRaisesRegex(ValueError, "schema validation"):
+            metadata.validate_build_metadata(payload, "daed")
+
     def test_release_item_for_flavor_uses_exact_tag_and_full_image_sha(self) -> None:
         results = {
             "built": [

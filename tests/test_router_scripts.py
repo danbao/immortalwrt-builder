@@ -113,6 +113,7 @@ class RouterScriptTests(unittest.TestCase):
             self.assertIn("network.lan.ipaddr=192.0.2.19", uci_calls)
             self.assertIn("bypass_router.main.target_ip=192.0.2.2", uci_calls)
             self.assertIn("firewall.bypass_mgmt_allow.src_ip=192.0.2.0/24", uci_calls)
+            self.assertIn("firewall.bypass_mgmt_reject.dest_port=22 80 443 2023 1688", uci_calls)
             self.assertIn("add_list uhttpd.main.listen_http=127.0.0.1:80", uci_calls)
             self.assertIn("add_list uhttpd.main.listen_https=127.0.0.1:443", uci_calls)
             self.assertIn("network reload", init_log.read_text(encoding="utf-8"))
@@ -229,17 +230,23 @@ class RouterScriptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = uci_log.read_text(encoding="utf-8")
-            self.assertIn("set mosdns.config.listen_address=0.0.0.0", calls)
+            self.assertIn("set mosdns.config.listen_address=127.0.0.1", calls)
             self.assertIn("set mosdns.config.listen_port=5335", calls)
             self.assertIn("add_list mosdns.config.local_dns=223.5.5.5", calls)
             self.assertIn("add_list mosdns.config.local_dns=119.29.29.29", calls)
             self.assertIn("add_list mosdns.config.remote_dns=https://dns.google/dns-query", calls)
-            self.assertIn("add_list mosdns.config.remote_dns=https://cloudflare-dns.com/dns-query", calls)
-            self.assertNotIn("quad9", calls.lower())
+            self.assertIn("add_list mosdns.config.remote_dns=https://dns11.quad9.net/dns-query", calls)
+            self.assertNotIn("cloudflare", calls.lower())
             self.assertIn("add_list dhcp.@dnsmasq[0].server=127.0.0.1#5335", calls)
             self.assertIn("set mosdns.config.geo_auto_update=0", calls)
             self.assertEqual(
                 crontab.read_text(encoding="utf-8").count("mosdns-geo-update-verified"),
+                1,
+            )
+            self.assertEqual(
+                crontab.read_text(encoding="utf-8").count(
+                    "'/usr/sbin/immortalwrt-updater' check --refresh"
+                ),
                 1,
             )
             services = service_log.read_text(encoding="utf-8")
@@ -551,6 +558,55 @@ class RouterScriptTests(unittest.TestCase):
             )
             self.assertNotEqual(section_result.returncode, 0)
             self.assertIn("no dropbear configuration", section_result.stderr)
+
+    def test_hardening_declares_required_service_and_firewall_controls(self) -> None:
+        content = HARDEN.read_text(encoding="utf-8")
+        for expected in (
+            "PasswordAuth=off",
+            "RootPasswordAuth=off",
+            "listen_address=127.0.0.1",
+            "dns.google/dns-query",
+            "dns11.quad9.net/dns-query",
+            "dhcp.lan.dhcpv6='disabled'",
+            "dest_port='22 443 2023'",
+            "dest_port='1688'",
+            "input=REJECT",
+        ):
+            self.assertIn(expected, content)
+
+    def test_hardening_refuses_to_continue_without_a_lan_zone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            key = tmp / "authorized_keys"
+            key.write_text("ssh-ed25519 REDACTED test\n", encoding="utf-8")
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            make_executable(
+                bin_dir / "uci",
+                """#!/bin/sh
+case "$*" in
+  '-q show dropbear') printf '%s\n' 'dropbear.main=dropbear' ;;
+  '-q get network.lan.ipaddr') printf '%s\n' '192.0.2.2' ;;
+  '-q get bypass_router.main.trusted_cidr') exit 1 ;;
+  '-q show firewall') exit 0 ;;
+  '-q get '*) exit 1 ;;
+esac
+exit 0
+""",
+            )
+            result = subprocess.run(
+                [HARDEN],
+                env={
+                    **os.environ,
+                    "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "BYPASS_AUTHORIZED_KEYS": str(key),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("LAN firewall zone not found", result.stderr)
 
     def test_filter_sync_requires_arguments_and_credentials(self) -> None:
         usage_result = subprocess.run(

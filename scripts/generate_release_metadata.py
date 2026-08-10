@@ -255,6 +255,42 @@ def spdx_namespace(repository: str, item: dict[str, object]) -> str:
     )
 
 
+def load_firmware_identity(path: Path, flavor: str) -> dict[str, object]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    identity_sha256 = str(payload.get("identity_sha256", ""))
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("repository") != "danbao/immortalwrt-builder"
+        or payload.get("flavor") != flavor
+        or payload.get("target") != "x86/64"
+        or not fnmatch.fnmatch(identity_sha256, "[0-9a-f]" * 64)
+    ):
+        raise ValueError(f"invalid firmware identity for {flavor}: {path}")
+    return payload
+
+
+def validate_build_metadata(payload: dict[str, object], flavor: str) -> None:
+    identity = payload.get("firmware_identity")
+    release = payload.get("release")
+    if not isinstance(identity, dict) or not isinstance(release, dict):
+        raise ValueError("build metadata is missing identity or release data")
+    expected_tag_prefix = "openwrt-immortalwrt-x86-64-"
+    if flavor == "daed":
+        expected_tag_prefix += "daed-"
+    image_sha256 = str(release.get("image_sha256", ""))
+    if (
+        payload.get("schema_version") != 2
+        or payload.get("repository") != "danbao/immortalwrt-builder"
+        or payload.get("flavor") != flavor
+        or payload.get("target") != "x86/64"
+        or identity.get("flavor") != flavor
+        or identity.get("target") != "x86/64"
+        or not str(release.get("release_tag", "")).startswith(expected_tag_prefix)
+        or not fnmatch.fnmatch(image_sha256, "[0-9a-f]" * 64)
+    ):
+        raise ValueError(f"build metadata schema validation failed for {flavor}")
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--standard-manifest", type=Path, required=True)
@@ -271,6 +307,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--immortalwrt-commit", required=True)
     parser.add_argument("--build-date", required=True)
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--standard-identity", type=Path, required=True)
+    parser.add_argument("--daed-identity", type=Path, required=True)
     return parser.parse_args(argv)
 
 
@@ -284,27 +322,36 @@ def main(argv: list[str]) -> int:
         provenance = json.loads(args.provenance.read_text(encoding="utf-8"))
         source_refs = json.loads(args.source_refs.read_text(encoding="utf-8"))
         results = json.loads(args.results.read_text(encoding="utf-8"))
+        identities = {
+            "standard": load_firmware_identity(args.standard_identity, "standard"),
+            "daed": load_firmware_identity(args.daed_identity, "daed"),
+        }
         common_metadata = {
-                "schema_version": 1,
-                "repository": args.repository,
-                "build_date": args.build_date,
-                "imagebuilder": {
-                    "version": args.imagebuilder_version,
-                    "sha256": args.imagebuilder_sha256,
-                },
-                "immortalwrt": {
-                    "version_code": args.immortalwrt_version_code,
-                    "commit": args.immortalwrt_commit,
-                },
-                "results": results,
+            "schema_version": 2,
+            "repository": args.repository,
+            "build_date": args.build_date,
+            "imagebuilder": {
+                "version": args.imagebuilder_version,
+                "sha256": args.imagebuilder_sha256,
+            },
+            "immortalwrt": {
+                "version_code": args.immortalwrt_version_code,
+                "commit": args.immortalwrt_commit,
+            },
+            "results": results,
         }
         for flavor, packages in (("standard", standard), ("daed", daed)):
             release_item = release_item_for_flavor(results, flavor)
             flavor_dir = args.out_dir / flavor
-            write_json(
-                flavor_dir / "build-metadata.json",
-                {**common_metadata, "flavor": flavor, "release": release_item},
-            )
+            build_metadata = {
+                **common_metadata,
+                "flavor": flavor,
+                "target": "x86/64",
+                "firmware_identity": identities[flavor],
+                "release": release_item,
+            }
+            validate_build_metadata(build_metadata, flavor)
+            write_json(flavor_dir / "build-metadata.json", build_metadata)
             write_json(flavor_dir / "upstream-provenance.json", provenance)
             write_json(
                 flavor_dir / "third-party-sources.json",

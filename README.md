@@ -42,6 +42,11 @@
 8. 再次验证客户端 DNS、透明代理、跨 Port Group 流量和回滚路径，稳定后才移除旧 VM。
 9. 公钥登录确认无误后运行 `/usr/sbin/bypass-router-harden`，关闭 root 密码 SSH，并停用 LuCI 明文 HTTP。
 
+加固脚本还会把 LAN 输入策略改为拒绝，仅放行初始化时记录的可信 `/24`
+网段访问 DNS、SSH、LuCI HTTPS、daed、KMS 和必要 ICMP；MosDNS 只监听
+回环地址，daed 只监听 LAN IPv4。IPv6 由上游主路由直连，不属于 dae 的代理
+保证范围。
+
 `check` 只验证链路、实时流量和进程状态，无法替代第 4 步的真实客户端灰度。`apply` 在发现目标地址仍被占用时会拒绝接管，避免地址冲突。
 
 镜像扩容后出现“backup GPT invalid”时，先创建 VMware 快照并确认控制台可用，再用磁盘工具把备份 GPT 移到磁盘末尾；这是会改分区表的维护操作，不由首次启动脚本自动执行。`sda128` 是 BIOS 引导保留分区，不是数据盘损坏，固件已经关闭 `anon_mount`，不会再把它当 exFAT 自动挂载。
@@ -72,6 +77,28 @@ GitHub Actions 每天北京时间 02:00 自动执行构建。手动运行默认�
 - `third-party-sources.json`：第三方组件的许可证及源码位置。
 - GitHub artifact attestation：raw image 和 OVA 的构建来源证明。
 
+### 路由器内更新
+
+daed 固件包含“系统 → 固件更新”页面和 `/usr/sbin/immortalwrt-updater`：
+
+```sh
+immortalwrt-updater status
+immortalwrt-updater check [--refresh]
+immortalwrt-updater download
+immortalwrt-updater verify
+immortalwrt-updater upgrade --snapshot-confirmed
+```
+
+更新源固定为本仓库非草稿、非预发布的 daed x86/64 Release。更新器强制核对
+GitHub asset digest、`build-metadata.json`、`.sha256` 和实际镜像哈希，并要求
+`sysupgrade -T` 通过。每天 04:30 只检查版本，不会自动刷写；安装前必须创建
+VMware 快照并显式确认。官方 `owut`/Attended Sysupgrade 不适用于这套自定义
+Release 源。
+
+每个新镜像内置确定性固件身份，由 builder commit、ImageBuilder、ImmortalWrt、
+包清单和上游 provenance 共同计算。构建输入没有变化时不会产生伪更新。旧镜像
+首次使用更新器时会显示身份未知，完成一次受信升级后即可执行重复更新与降级保护。
+
 ## 供应链边界
 
 ImageBuilder 使用 ImmortalWrt 官方 SHA256 校验。GitHub Release 依赖会先解析本次 `latest` 的 tag 和 asset ID，再按 asset ID 下载；API 提供 SHA256 digest 时强制校验，下载期间元数据发生变化时构建失败。
@@ -97,6 +124,8 @@ shellcheck files/etc/uci-defaults/99-bypass-router.sh
 shellcheck files/usr/sbin/bypass-router-configure \
   files/usr/sbin/bypass-router-cutover \
   files/usr/sbin/bypass-router-harden \
+  files/usr/sbin/bypass-router-apply-sysctl \
+  files/usr/sbin/immortalwrt-updater \
   files/usr/sbin/bypass-router-daed-configure \
   files/usr/share/luci-app-daede/daed-filter-sync.sh \
   files/usr/local/sbin/daed-subscription-sync \

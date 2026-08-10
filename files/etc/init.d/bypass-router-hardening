@@ -1,0 +1,9 @@
+#!/bin/sh /etc/rc.common
+
+# rc.common consumes this variable after sourcing the init script.
+# shellcheck disable=SC2034
+START=99
+
+start() {
+	"/usr/sbin/bypass-router-apply-sysctl"
+}

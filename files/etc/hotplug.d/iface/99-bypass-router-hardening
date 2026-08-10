@@ -1,0 +1,4 @@
+#!/bin/sh
+
+[ -x "/usr/sbin/bypass-router-apply-sysctl" ] || exit 0
+"/usr/sbin/bypass-router-apply-sysctl"

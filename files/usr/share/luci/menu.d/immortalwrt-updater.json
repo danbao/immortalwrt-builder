@@ -1,0 +1,13 @@
+{
+  "admin/system/immortalwrt-updater": {
+    "title": "固件更新",
+    "order": 95,
+    "action": {
+      "type": "view",
+      "path": "system/immortalwrt-updater"
+    },
+    "depends": {
+      "acl": ["immortalwrt-updater"]
+    }
+  }
+}
