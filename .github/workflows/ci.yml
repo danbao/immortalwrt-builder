@@ -29,19 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libjson-c-dev zlib1g-dev
-          git clone --filter=blob:none --no-checkout "https://github.com/jow-/ucode.git" ".ci-ucode"
-          git -C ".ci-ucode" checkout --detach "85922056ef7abeace3cca3ab28bc1ac2d88e31b1"
-          test "$(git -C ".ci-ucode" rev-parse HEAD)" = "85922056ef7abeace3cca3ab28bc1ac2d88e31b1"
-          cmake -S ".ci-ucode" -B ".ci-ucode/build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/.ci-tools" \
-            -DCMAKE_INSTALL_RPATH="${GITHUB_WORKSPACE}/.ci-tools/lib" \
-            -DUBUS_SUPPORT=OFF -DUCI_SUPPORT=OFF -DULOOP_SUPPORT=OFF \
-            -DNL80211_SUPPORT=OFF -DRTNL_SUPPORT=OFF -DRESOLV_SUPPORT=OFF \
-            -DLOG_SUPPORT=OFF -DDIGEST_SUPPORT=OFF
-          cmake --build ".ci-ucode/build" --parallel 2
-          cmake --install ".ci-ucode/build"
-          test -x ".ci-tools/bin/ucode"
+          scripts/install-host-ucode.sh "${GITHUB_WORKSPACE}/.ci-tools"
           echo "UCODE_BIN=${GITHUB_WORKSPACE}/.ci-tools/bin/ucode" >> "${GITHUB_ENV}"
 
       - name: Validate Python
@@ -68,6 +56,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
           shellcheck \
+            scripts/install-host-ucode.sh \
             files/etc/uci-defaults/99-bypass-router.sh \
             files/etc/hotplug.d/iface/99-bypass-router-hardening \
             files/etc/init.d/bypass-router-hardening \

@@ -42,6 +42,19 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
         self.assertIn("IB_TARGET: x86/64", workflow)
         self.assertIn("IB_PACKAGE_ARCH: x86_64", workflow)
 
+    def test_workflows_share_the_pinned_host_ucode_installer(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        build_workflow = (root / ".github" / "workflows" / "build-openwrt.yml").read_text(
+            encoding="utf-8"
+        )
+        pull_request_workflow = (root / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        invocation = 'scripts/install-host-ucode.sh "${GITHUB_WORKSPACE}/.ci-tools"'
+        self.assertIn(invocation, build_workflow)
+        self.assertIn(invocation, pull_request_workflow)
+        self.assertNotIn("imagebuilder/staging_dir/host/bin/ucode", build_workflow)
+
     def test_daed_release_metadata_uses_distinct_tag_title_and_assets(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(
             "immortalwrt-x86-64-daed",
