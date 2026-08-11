@@ -789,6 +789,7 @@ exit 0
             request_log = tmp / "graphql.log"
             sync_log = tmp / "sync.log"
             crontab = tmp / "root.cron"
+            bypass_uci = tmp / "bypass_router"
             make_executable(
                 bin_dir / "uci",
                 "#!/bin/sh\n"
@@ -843,6 +844,7 @@ exit 0
                     "DAED_OBJECT_ID_HELPER": str(bin_dir / "object-id"),
                     "DAED_SYNC_COMMAND": str(bin_dir / "sync"),
                     "BYPASS_CRONTAB": str(crontab),
+                    "BYPASS_UCI_CONFIG": str(bypass_uci),
                 },
                 capture_output=True,
                 text=True,
@@ -859,6 +861,8 @@ exit 0
             self.assertIn("set bypass_router.daed.direct_resolver=192.0.2.53", calls)
             self.assertEqual(sync_log.read_text(encoding="utf-8").strip(), "called")
             self.assertEqual(crontab.read_text().count("daed-subscription-sync"), 1)
+            self.assertTrue(bypass_uci.is_file())
+            self.assertEqual(bypass_uci.stat().st_mode & 0o777, 0o600)
 
     def test_daed_sync_restores_remote_link_when_update_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
@@ -867,6 +871,7 @@ exit 0
             bin_dir.mkdir()
             request_log = tmp / "requests.log"
             sync_log = tmp / "sync.log"
+            mosdns_log = tmp / "mosdns.log"
             make_executable(
                 bin_dir / "uci",
                 "#!/bin/sh\n"
@@ -903,6 +908,8 @@ exit 0
                 "if [ -z \"$body\" ]; then printf '%s' 'subscription-data' > \"$output\"; exit 0; fi\n"
                 "if grep -q 'query Token' \"$body\"; then printf '%s' '{\"data\":{\"token\":\"token\"}}'; exit 0; fi\n"
                 "if grep -q 'query SyncSource' \"$body\"; then printf '%s' '{\"data\":{\"subscriptions\":[]}}'; exit 0; fi\n"
+                "if grep -q 'importSubscription' \"$body\"; then echo tolerant-import >> \"$REQUEST_LOG\"; printf '%s' '{\"data\":{\"importSubscription\":{\"sub\":{\"id\":\"staging1\"},\"nodeImportResult\":[]}}}'; exit 0; fi\n"
+                "if grep -q 'removeSubscriptions' \"$body\"; then echo remove-staging >> \"$REQUEST_LOG\"; printf '%s' '{\"data\":{\"removeSubscriptions\":1}}'; exit 0; fi\n"
                 "if grep -q 'updateSubscriptionLink' \"$body\"; then\n"
                 "  if grep -q '127.0.0.1/cgi-bin/daede-sub' \"$body\"; then echo local-link >> \"$REQUEST_LOG\"; else echo restore-link >> \"$REQUEST_LOG\"; fi\n"
                 "  printf '%s' '{\"data\":{\"updateSubscriptionLink\":{\"id\":\"sub1\"}}}'; exit 0; fi\n"
@@ -915,7 +922,7 @@ exit 0
                 "#!/bin/sh\n"
                 "file=''\nexpression=''\n"
                 "while [ \"$#\" -gt 0 ]; do case \"$1\" in -i) file=$2; shift 2 ;; -e) expression=$2; shift 2 ;; *) shift ;; esac; done\n"
-                "case \"$expression\" in @.data.token) echo token ;; @.id) echo sub1 ;; @.link) echo https://source.example/subscription ;; esac\n",
+                "case \"$expression\" in @.data.token) echo token ;; @.data.importSubscription.sub.id) echo staging1 ;; @.id) echo sub1 ;; @.link) echo https://source.example/subscription ;; esac\n",
             )
             make_executable(
                 bin_dir / "meta-helper",
@@ -925,6 +932,15 @@ exit 0
                 bin_dir / "filter-sync",
                 "#!/bin/sh\nprintf '%s\\n' 'Filtered subscription synced: selected=7 excluded=2'\n",
             )
+            make_executable(
+                bin_dir / "import-links",
+                "#!/bin/sh\nprintf '%s\\n' 'ss://valid-node'\n",
+            )
+            make_executable(
+                bin_dir / "mosdns-init",
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$MOSDNS_LOG\"\n"
+                "[ \"$1\" = running ] || [ \"$1\" = restart ]\n",
+            )
             sync_env = {
                 **os.environ,
                 "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -932,6 +948,9 @@ exit 0
                 "DAED_SYNC_LOG": str(sync_log),
                 "DAED_META_HELPER": str(bin_dir / "meta-helper"),
                 "DAED_FILTER_SYNC": str(bin_dir / "filter-sync"),
+                "DAED_IMPORT_LINKS_HELPER": str(bin_dir / "import-links"),
+                "DAED_MOSDNS_INIT": str(bin_dir / "mosdns-init"),
+                "MOSDNS_LOG": str(mosdns_log),
                 "DAED_SYNC_LOCK": str(tmp / "sync.lock"),
             }
             result = subprocess.run(
@@ -948,7 +967,16 @@ exit 0
                 f"log={sync_log.read_text(encoding='utf-8') if sync_log.exists() else '<missing>'}",
             )
             requests = request_log.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(requests[:3], ["local-link", "update-subscription", "restore-link"])
+            self.assertEqual(
+                requests[:5],
+                [
+                    "tolerant-import",
+                    "remove-staging",
+                    "local-link",
+                    "update-subscription",
+                    "restore-link",
+                ],
+            )
             visible = result.stdout + result.stderr + sync_log.read_text(encoding="utf-8")
             self.assertNotIn("source.example", visible)
 
@@ -963,8 +991,16 @@ exit 0
             self.assertEqual(success.returncode, 0, success.stderr)
             self.assertEqual(
                 request_log.read_text(encoding="utf-8").splitlines(),
-                ["local-link", "update-subscription", "restore-link", "disable-cron"],
+                [
+                    "tolerant-import",
+                    "remove-staging",
+                    "local-link",
+                    "update-subscription",
+                    "restore-link",
+                    "disable-cron",
+                ],
             )
+            self.assertEqual(mosdns_log.read_text(encoding="utf-8").splitlines(), ["running", "restart"])
 
     def test_public_router_helpers_are_executable(self) -> None:
         helpers = (
@@ -973,6 +1009,7 @@ exit 0
             GEO_UPDATE,
             ROOT / "files" / "usr" / "share" / "luci-app-daede" / "daed-object-id.uc",
             ROOT / "files" / "usr" / "share" / "luci-app-daede" / "daed-subscription-meta.uc",
+            ROOT / "files" / "usr" / "share" / "luci-app-daede" / "daed-import-links.uc",
         )
         for helper in helpers:
             with self.subTest(helper=helper):

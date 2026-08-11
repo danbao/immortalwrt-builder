@@ -9,6 +9,7 @@ umask 077
 OBJECT_ID_HELPER="${DAED_OBJECT_ID_HELPER:-/usr/share/luci-app-daede/daed-object-id.uc}"
 SYNC_COMMAND="${DAED_SYNC_COMMAND:-/usr/local/sbin/daed-subscription-sync}"
 CRONTAB="${BYPASS_CRONTAB:-/etc/crontabs/root}"
+UCI_CONFIG="${BYPASS_UCI_CONFIG:-/etc/config/bypass_router}"
 TMPDIR=''
 TOKEN=''
 GRAPHQL_URL=''
@@ -191,6 +192,10 @@ run_mutation 'select-routing' \
 run_mutation 'validate' 'mutation Validate($dry:Boolean!){run(dry:$dry)}' '{"dry":true}'
 run_mutation 'apply' 'mutation Apply($dry:Boolean!){run(dry:$dry)}' '{"dry":false}'
 
+[ -e "$UCI_CONFIG" ] || {
+	: > "$UCI_CONFIG" || fail 'failed to create the bypass-router UCI config'
+	chmod 0600 "$UCI_CONFIG" || fail 'failed to secure the bypass-router UCI config'
+}
 uci -q set bypass_router.daed='daed'
 uci -q set "bypass_router.daed.subscription_tag=${SUBSCRIPTION_TAG}"
 uci -q set bypass_router.daed.group='proxy'
