@@ -8,12 +8,15 @@ umask 077
 
 FILTER_SYNC="${DAED_FILTER_SYNC:-/usr/share/luci-app-daede/daed-filter-sync.sh}"
 META_HELPER="${DAED_META_HELPER:-/usr/share/luci-app-daede/daed-subscription-meta.uc}"
+IMPORT_LINKS_HELPER="${DAED_IMPORT_LINKS_HELPER:-/usr/share/luci-app-daede/daed-import-links.uc}"
+MOSDNS_INIT="${DAED_MOSDNS_INIT:-/etc/init.d/mosdns}"
 LOG="${DAED_SYNC_LOG:-/tmp/daed-subscription-sync.log}"
 LOCK="${DAED_SYNC_LOCK:-/tmp/daed-subscription-sync.lock}"
 TMPDIR=''
 STAGE_FILE=''
 TOKEN=''
 SUB_ID=''
+STAGING_SUB_ID=''
 SOURCE_URL=''
 GRAPHQL_URL=''
 RESTORE_LINK=0
@@ -91,8 +94,26 @@ restore_subscription_link() {
 	fi
 }
 
+remove_staging_subscription() {
+	local body
+	local output
+	[ -n "$STAGING_SUB_ID" ] || return 0
+	[ -n "$TMPDIR" ] && [ -n "$TOKEN" ] || return 1
+	body="$TMPDIR/remove-staging-body.json"
+	output="$TMPDIR/remove-staging-response.json"
+	printf '{"query":"mutation Remove($ids:[ID!]!){removeSubscriptions(ids:$ids)}","variables":{"ids":["%s"]}}' \
+		"$(json_escape "$STAGING_SUB_ID")" > "$body"
+	if post_graphql "$body" "$output" "$TOKEN" && ! grep -q '"errors"' "$output"; then
+		STAGING_SUB_ID=''
+		return 0
+	fi
+	log 'ERROR: failed to remove temporary sanitized subscription'
+	return 1
+}
+
 cleanup() {
 	restore_subscription_link || true
+	remove_staging_subscription || true
 	[ -z "$STAGE_FILE" ] || rm -f "$STAGE_FILE"
 	[ -z "$TMPDIR" ] || rm -rf "$TMPDIR"
 	rmdir "$LOCK" 2>/dev/null || true
@@ -122,6 +143,7 @@ valid_ipv4 "$DIRECT_RESOLVER" || fail 'direct resolver is not a valid IPv4 addre
 
 [ -x "$FILTER_SYNC" ] || fail 'filtered subscription sync helper is missing'
 [ -x "$META_HELPER" ] || fail 'subscription metadata helper is missing'
+[ -x "$IMPORT_LINKS_HELPER" ] || fail 'subscription import sanitizer is missing'
 pidof daed >/dev/null 2>&1 || fail 'daed is not running'
 mkdir "$LOCK" 2>/dev/null || fail 'daed subscription sync is already running'
 trap cleanup EXIT INT TERM
@@ -184,6 +206,27 @@ curl -4 -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
 chmod 0600 "$STAGE_FILE"
 
 local_link="http://127.0.0.1/cgi-bin/daede-sub?t=${stage_token}"
+
+import_body="$TMPDIR/import-subscription-body.json"
+import_response="$TMPDIR/import-subscription-response.json"
+staging_tag="__sync_${stage_token}"
+printf '{"query":"mutation Import($rollback:Boolean!,$arg:ImportArgument!){importSubscription(rollbackError:$rollback,arg:$arg){sub{id tag} nodeImportResult{link error node{id}}}}","variables":{"rollback":false,"arg":{"link":"%s","tag":"%s"}}}' \
+	"$(json_escape "$local_link")" "$(json_escape "$staging_tag")" > "$import_body"
+post_graphql "$import_body" "$import_response" "$TOKEN" \
+	|| fail 'daed GraphQL request failed while sanitizing the subscription'
+STAGING_SUB_ID="$(jsonfilter -i "$import_response" -e '@.data.importSubscription.sub.id' 2>/dev/null || true)"
+[ -n "$STAGING_SUB_ID" ] || fail 'daed created no temporary sanitized subscription'
+
+sanitized_file="$TMPDIR/sanitized-subscription"
+"$IMPORT_LINKS_HELPER" "$import_response" > "$sanitized_file" \
+	|| fail 'failed to extract valid nodes from the subscription'
+[ -s "$sanitized_file" ] || fail 'sanitized subscription is empty'
+valid_count="$(wc -l < "$sanitized_file" | tr -d ' ')"
+mv "$sanitized_file" "$STAGE_FILE"
+chmod 0600 "$STAGE_FILE"
+
+remove_staging_subscription || fail 'failed to remove temporary sanitized subscription'
+
 body="$TMPDIR/local-link-body.json"
 write_link_body "$body" "$local_link"
 graphql_checked "$body" "$TMPDIR/local-link-response.json"
@@ -210,9 +253,13 @@ DAED_SKIP_UPDATE=1 "$FILTER_SYNC" "$SUBSCRIPTION_TAG" "$GROUP_NAME" "$EXCLUDE_KE
 sync_summary="$(sed -n 's/^Filtered subscription synced: //p' "$sync_output" | tail -n 1)"
 [ -n "$sync_summary" ] || fail 'filtered subscription returned no summary'
 
+if [ -x "$MOSDNS_INIT" ] && "$MOSDNS_INIT" running >/dev/null 2>&1; then
+	"$MOSDNS_INIT" restart || fail 'failed to restart MosDNS after applying daed changes'
+fi
+
 run_mutation 'disable-built-in-cron' \
 	'mutation Cron($id:ID!,$exp:String!,$enable:Boolean!){updateSubscriptionCron(id:$id,cronExp:$exp,cronEnable:$enable){id tag}}' \
 	"{\"id\":\"$(json_escape "$SUB_ID")\",\"exp\":\"17 */6 * * *\",\"enable\":false}"
 
-log "sync complete tag=$SUBSCRIPTION_TAG group=$GROUP_NAME $sync_summary built-in-cron=disabled"
+log "sync complete tag=$SUBSCRIPTION_TAG group=$GROUP_NAME valid=$valid_count $sync_summary built-in-cron=disabled"
 printf '%s\n' "$sync_summary"
