@@ -190,7 +190,6 @@ run_mutation 'select-routing' \
 	'mutation SelectRouting($id:ID!){selectRouting(id:$id)}' \
 	"{\"id\":\"$(json_escape "$ROUTING_ID")\"}"
 run_mutation 'validate' 'mutation Validate($dry:Boolean!){run(dry:$dry)}' '{"dry":true}'
-run_mutation 'apply' 'mutation Apply($dry:Boolean!){run(dry:$dry)}' '{"dry":false}'
 
 [ -e "$UCI_CONFIG" ] || {
 	: > "$UCI_CONFIG" || fail 'failed to create the bypass-router UCI config'
