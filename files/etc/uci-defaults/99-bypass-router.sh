@@ -3,7 +3,7 @@
 INIT_DIR="${BYPASS_INIT_DIR:-/etc/init.d}"
 CRONTAB="${BYPASS_CRONTAB:-/etc/crontabs/root}"
 
-# Prepare the two-link bridge. Site-specific addresses are applied from the VM
+# Prepare the six-port LAN bridge. Site-specific addresses are applied from the VM
 # console with bypass-router-configure and are never baked into the image.
 uci -q set network.lan.device='br-lan'
 
@@ -16,9 +16,21 @@ if [ -z "$bridge_section" ]; then
 fi
 uci -q set "${bridge_section}.stp=1"
 uci -q delete "${bridge_section}.ports"
-uci -q add_list "${bridge_section}.ports=eth0"
-uci -q add_list "${bridge_section}.ports=eth1"
+persist_bridge_ports=0
+if uci -q get bypass_router.main >/dev/null 2>&1; then
+	uci -q delete bypass_router.main.bridge_port
+	persist_bridge_ports=1
+fi
+for port in eth0 eth1 eth2 eth3 eth4 eth5; do
+	uci -q add_list "${bridge_section}.ports=${port}"
+	if [ "$persist_bridge_ports" = '1' ]; then
+		uci -q add_list "bypass_router.main.bridge_port=${port}"
+	fi
+done
 uci -q commit network
+if [ "$persist_bridge_ports" = '1' ]; then
+	uci -q commit bypass_router
+fi
 
 # Bypass router: the main router owns address assignment.
 uci -q set dhcp.lan.ignore='1'

@@ -32,16 +32,23 @@ counter_sum() {
 check_links() {
 	[ -d "${SYS_CLASS_NET}/${BRIDGE}/brif" ] || fail "${BRIDGE} does not exist"
 	ports="$(bridge_ports)"
-	count="$(printf '%s\n' "$ports" | sed '/^$/d' | wc -l)"
-	[ "$count" -ge 2 ] || fail "${BRIDGE} needs two ports; found ${count}"
+	expected_ports="$(uci -q get bypass_router.main.bridge_port 2>/dev/null || true)"
+	[ -n "$expected_ports" ] || expected_ports="$ports"
+	for interface in $expected_ports; do
+		[ -e "${SYS_CLASS_NET}/${BRIDGE}/brif/${interface}" ] \
+			|| fail "expected bridge port ${interface} is missing from ${BRIDGE}"
+	done
 
 	before_file="$(mktemp '/tmp/bypass-router-links.XXXXXX')"
 	trap 'rm -f "$before_file"' EXIT INT TERM
 	for interface in $ports; do
 		[ "$(cat "${SYS_CLASS_NET}/${interface}/carrier" 2>/dev/null || true)" = '1' ] \
-			|| fail "${interface} has no carrier"
+			|| continue
 		printf '%s %s\n' "$interface" "$(counter_sum "$interface")" >> "$before_file"
 	done
+	active_count="$(awk 'END { print NR }' "$before_file")"
+	[ "$active_count" -ge 2 ] \
+		|| fail "${BRIDGE} needs two active ports; found ${active_count}"
 
 	sleep "$SAMPLE_SECONDS"
 	while read -r interface before; do

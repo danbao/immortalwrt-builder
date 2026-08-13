@@ -247,6 +247,10 @@ fi
 restore_subscription_link
 [ "$RESTORE_LINK" = '0' ] || fail 'failed to restore subscription source link'
 
+run_mutation 'disable-built-in-cron' \
+	'mutation Cron($id:ID!,$exp:String!,$enable:Boolean!){updateSubscriptionCron(id:$id,cronExp:$exp,cronEnable:$enable){id tag}}' \
+	"{\"id\":\"$(json_escape "$SUB_ID")\",\"exp\":\"17 */6 * * *\",\"enable\":false}"
+
 sync_output="$TMPDIR/filter-output.txt"
 DAED_SKIP_UPDATE=1 "$FILTER_SYNC" "$SUBSCRIPTION_TAG" "$GROUP_NAME" "$EXCLUDE_KEYWORD" \
 	> "$sync_output" || fail 'filtered subscription apply failed'
@@ -256,10 +260,6 @@ sync_summary="$(sed -n 's/^Filtered subscription synced: //p' "$sync_output" | t
 if [ -x "$MOSDNS_INIT" ] && "$MOSDNS_INIT" running >/dev/null 2>&1; then
 	"$MOSDNS_INIT" restart || fail 'failed to restart MosDNS after applying daed changes'
 fi
-
-run_mutation 'disable-built-in-cron' \
-	'mutation Cron($id:ID!,$exp:String!,$enable:Boolean!){updateSubscriptionCron(id:$id,cronExp:$exp,cronEnable:$enable){id tag}}' \
-	"{\"id\":\"$(json_escape "$SUB_ID")\",\"exp\":\"17 */6 * * *\",\"enable\":false}"
 
 log "sync complete tag=$SUBSCRIPTION_TAG group=$GROUP_NAME valid=$valid_count $sync_summary built-in-cron=disabled"
 printf '%s\n' "$sync_summary"

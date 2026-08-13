@@ -7,6 +7,8 @@ set -eu
 umask 077
 
 PLAN_HELPER="${DAED_PLAN_HELPER:-/usr/share/luci-app-daede/daed-filter-plan.uc}"
+DAED_INIT="${DAED_FILTER_DAED_INIT:-/etc/init.d/daed}"
+SLEEP="${DAED_FILTER_SLEEP:-sleep}"
 LOG="${DAED_FILTER_LOG:-/tmp/luci-app-daede.filtered-sync.log}"
 LOCK="${DAED_SYNC_LOCK:-/tmp/luci-app-daede.filtered-sync.lock}"
 TMPDIR=""
@@ -96,6 +98,31 @@ run_mutation_soft() {
 	! grep -q '"errors"' "$output"
 }
 
+wait_for_daed() {
+	local attempts="${DAED_FILTER_RESTART_ATTEMPTS:-30}"
+	local response="$TMPDIR/restart-login-response.json"
+	local body="$TMPDIR/restart-login-body.json"
+
+	printf '{"query":"query Token($username:String!,$password:String!){token(username:$username,password:$password)}","variables":{"username":"%s","password":"%s"}}' \
+		"$(json_escape "$USERNAME")" "$(json_escape "$PASSWORD")" > "$body"
+	while [ "$attempts" -gt 0 ]; do
+		if pidof daed >/dev/null 2>&1 && post_graphql "$body" "$response" 2>/dev/null; then
+			TOKEN="$(jsonfilter -i "$response" -e '@.data.token' 2>/dev/null || true)"
+			[ -n "$TOKEN" ] && return 0
+		fi
+		attempts=$((attempts - 1))
+		[ "$attempts" -gt 0 ] && "$SLEEP" 1
+	done
+	return 1
+}
+
+restart_daed() {
+	[ -x "$DAED_INIT" ] || fail "Missing daed init script: $DAED_INIT"
+	log 'restarting daed to apply validated configuration safely'
+	"$DAED_INIT" restart || fail 'Failed to restart daed after updating the node group'
+	wait_for_daed || fail 'daed did not recover after the controlled restart'
+}
+
 rollback_changes() {
 	local rollback_failed=0
 	[ "$ROLLBACK_REQUIRED" = '1' ] || return 0
@@ -118,10 +145,6 @@ rollback_changes() {
 			"{\"id\":\"$(json_escape "$GROUP_ID")\",\"ids\":[\"$(json_escape "$SUB_ID")\"],\"regex\":\"$(json_escape "$SUBSCRIPTION_FILTER_REGEX")\"}" \
 			|| rollback_failed=1
 	fi
-	run_mutation_soft "rollback-apply" \
-		'mutation Apply($dry:Boolean!){run(dry:$dry)}' '{"dry":false}' \
-		|| rollback_failed=1
-
 	ROLLBACK_REQUIRED=0
 	if [ "$rollback_failed" = '0' ]; then
 		log 'restored previous daed group configuration after failure'
@@ -227,6 +250,7 @@ fi
 
 run_mutation "validate" 'mutation Validate($dry:Boolean!){run(dry:$dry)}' '{"dry":true}'
 run_mutation "apply" 'mutation Apply($dry:Boolean!){run(dry:$dry)}' '{"dry":false}'
+restart_daed
 ROLLBACK_REQUIRED=0
 
 log "sync complete tag=$SUBSCRIPTION_TAG selected=$DESIRED_COUNT excluded=$EXCLUDED_COUNT"

@@ -112,6 +112,11 @@ class RouterScriptTests(unittest.TestCase):
             uci_calls = uci_log.read_text(encoding="utf-8")
             self.assertIn("network.lan.ipaddr=192.0.2.19", uci_calls)
             self.assertIn("bypass_router.main.target_ip=192.0.2.2", uci_calls)
+            for port in ("eth0", "eth1", "eth2", "eth3", "eth4", "eth5"):
+                self.assertIn(f"add_list network.br_lan.ports={port}", uci_calls)
+                self.assertIn(
+                    f"add_list bypass_router.main.bridge_port={port}", uci_calls
+                )
             self.assertIn("firewall.bypass_mgmt_allow.src_ip=192.0.2.0/24", uci_calls)
             self.assertIn("firewall.bypass_mgmt_reject.dest_port=22 80 443 2023 1688", uci_calls)
             self.assertIn("add_list uhttpd.main.listen_http=127.0.0.1:80", uci_calls)
@@ -158,6 +163,9 @@ class RouterScriptTests(unittest.TestCase):
             self.assertIn("delete network.br_lan.ports", calls)
             for port in ("eth0", "eth1", "eth2", "eth3", "eth4", "eth5"):
                 self.assertIn(f"add_list network.br_lan.ports={port}", calls)
+                self.assertIn(
+                    f"add_list bypass_router.main.bridge_port={port}", calls
+                )
 
     def test_configure_rejects_unsafe_bridge_port_names(self) -> None:
         cases = (
@@ -230,6 +238,9 @@ class RouterScriptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = uci_log.read_text(encoding="utf-8")
+            self.assertIn("delete network.br_lan.ports", calls)
+            for port in ("eth0", "eth1", "eth2", "eth3", "eth4", "eth5"):
+                self.assertIn(f"add_list network.br_lan.ports={port}", calls)
             self.assertIn("set mosdns.config.listen_address=127.0.0.1", calls)
             self.assertIn("set mosdns.config.listen_port=5335", calls)
             self.assertIn("add_list mosdns.config.local_dns=223.5.5.5", calls)
@@ -441,10 +452,10 @@ class RouterScriptTests(unittest.TestCase):
             "BYPASS_SAMPLE_SECONDS": "0",
         }
 
-    def test_cutover_rejects_missing_port_carrier_and_traffic(self) -> None:
+    def test_cutover_rejects_too_few_active_ports_and_missing_traffic(self) -> None:
         cases = (
-            (("1",), "needs two ports"),
-            (("1", "0"), "has no carrier"),
+            (("1",), "needs two active ports"),
+            (("1", "0"), "needs two active ports"),
             (("1", "1"), "carried no traffic"),
         )
         for carriers, expected in cases:
@@ -459,6 +470,61 @@ class RouterScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
+
+    def test_cutover_rejects_an_expected_port_missing_from_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            env = self.make_cutover_fixture(tmp, ("1", "1"))
+            make_executable(
+                tmp / "bin" / "uci",
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  *bypass_router.main.target_ip*) echo 192.0.2.2 ;;\n"
+                "  *bypass_router.main.bridge_port*) echo 'eth0 eth1 eth4' ;;\n"
+                "  *network.lan.ipaddr*) echo 192.0.2.19 ;;\n"
+                "esac\n",
+            )
+            result = subprocess.run(
+                [CUTOVER, "check"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("expected bridge port eth4 is missing from br-lan", result.stderr)
+
+    def test_cutover_allows_disconnected_spare_bridge_ports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            env = self.make_cutover_fixture(tmp, ("1", "0", "0", "0", "1", "0"))
+            make_executable(
+                tmp / "bin" / "uci",
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  *bypass_router.main.target_ip*) echo 192.0.2.2 ;;\n"
+                "  *bypass_router.main.bridge_port*) echo 'eth0 eth1 eth2 eth3 eth4 eth5' ;;\n"
+                "  *network.lan.ipaddr*) echo 192.0.2.19 ;;\n"
+                "esac\n",
+            )
+            make_executable(
+                tmp / "bin" / "sleep",
+                "#!/bin/sh\n"
+                "for interface in eth0 eth4; do\n"
+                "  printf '2\\n' > \"$BYPASS_SYS_CLASS_NET/$interface/statistics/rx_bytes\"\n"
+                "done\n",
+            )
+            make_executable(tmp / "bin" / "pidof", "#!/bin/sh\nexit 1\n")
+            result = subprocess.run(
+                [CUTOVER, "check"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("mosdns is not running", result.stderr)
+            self.assertNotIn("carrier", result.stderr)
 
     def test_cutover_rejects_missing_proxy_process_after_healthy_links(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
@@ -710,8 +776,181 @@ exit 0
             self.assertTrue(request_log.exists(), result.stderr)
             self.assertEqual(
                 request_log.read_text(encoding="utf-8").splitlines(),
-                ["detach", "add", "remove", "validate", "add", "remove", "attach", "apply"],
+                ["detach", "add", "remove", "validate", "add", "remove", "attach"],
             )
+
+    def test_filter_sync_applies_validated_state_before_controlled_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            request_log = tmp / "requests.log"
+            init_log = tmp / "init.log"
+            make_executable(
+                bin_dir / "uci",
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  *daed.config.listen_addr*) echo 127.0.0.1:2023 ;;\n"
+                "  *daed.config.dashboard_username*) echo admin ;;\n"
+                "  *daed.config.dashboard_password*) echo REDACTED_PASSWORD ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+            )
+            make_executable(bin_dir / "pidof", "#!/bin/sh\nexit 0\n")
+            make_executable(bin_dir / "ucode", "#!/bin/sh\nexec \"$@\"\n")
+            make_executable(bin_dir / "sleep", "#!/bin/sh\nexit 0\n")
+            make_executable(
+                bin_dir / "plan",
+                "#!/bin/sh\n"
+                "printf '%s' '{\"subId\":\"sub1\",\"groupId\":\"group1\",\"subscriptionAttached\":false,\"subscriptionFilterRegex\":\"\",\"desiredCount\":1,\"excludedCount\":1,\"addCount\":0,\"staleCount\":0,\"addIds\":[],\"staleIds\":[]}'\n",
+            )
+            make_executable(
+                bin_dir / "jsonfilter",
+                "#!/bin/sh\n"
+                "expression=''\n"
+                "while [ \"$#\" -gt 0 ]; do case \"$1\" in -e) expression=$2; shift 2 ;; *) shift ;; esac; done\n"
+                "case \"$expression\" in\n"
+                "  @.data.token) echo token ;; @.subId) echo sub1 ;; @.groupId) echo group1 ;;\n"
+                "  @.desiredCount) echo 1 ;; @.excludedCount) echo 1 ;; @.subscriptionAttached) echo false ;;\n"
+                "  @.subscriptionFilterRegex) echo '' ;; @.addIds|@.staleIds) echo '[]' ;;\n"
+                "  @.addCount|@.staleCount) echo 0 ;;\n"
+                "esac\n",
+            )
+            make_executable(
+                bin_dir / "curl",
+                "#!/bin/sh\n"
+                "body=''\n"
+                "while [ \"$#\" -gt 0 ]; do case \"$1\" in --data-binary) body=${2#@}; shift 2 ;; -H|--max-time) shift 2 ;; -*) shift ;; *) shift ;; esac; done\n"
+                "if grep -q 'query Token' \"$body\"; then echo token >> \"$REQUEST_LOG\"; printf '%s' '{\"data\":{\"token\":\"token\"}}'; exit 0; fi\n"
+                "if grep -q 'query SyncState' \"$body\"; then printf '%s' '{\"data\":{\"subscriptions\":[],\"groups\":[]}}'; exit 0; fi\n"
+                "if grep -q '\"dry\":true' \"$body\"; then echo validate >> \"$REQUEST_LOG\"; printf '%s' '{\"data\":{\"run\":true}}'; exit 0; fi\n"
+                "if grep -q '\"dry\":false' \"$body\"; then echo hot-apply >> \"$REQUEST_LOG\"; fi\n"
+                "printf '%s' '{\"data\":{\"ok\":true}}'\n",
+            )
+            make_executable(
+                bin_dir / "daed-init",
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$INIT_LOG\"\n[ \"$1\" = restart ]\n",
+            )
+            result = subprocess.run(
+                [FILTER_SYNC, "primary", "proxy", "备用"],
+                env={
+                    **os.environ,
+                    "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "REQUEST_LOG": str(request_log),
+                    "INIT_LOG": str(init_log),
+                    "DAED_PLAN_HELPER": str(bin_dir / "plan"),
+                    "DAED_SYNC_LOCK": str(tmp / "filter.lock"),
+                    "DAED_FILTER_LOG": str(tmp / "filter.log"),
+                    "DAED_FILTER_DAED_INIT": str(bin_dir / "daed-init"),
+                    "DAED_FILTER_SLEEP": str(bin_dir / "sleep"),
+                    "DAED_SKIP_UPDATE": "1",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(init_log.read_text(encoding="utf-8").splitlines(), ["restart"])
+            self.assertEqual(
+                request_log.read_text(encoding="utf-8").splitlines(),
+                ["token", "validate", "hot-apply", "token"],
+            )
+            self.assertIn("selected=1 excluded=1", result.stdout)
+
+    def test_filter_sync_rolls_back_when_controlled_restart_fails(self) -> None:
+        cases = (
+            ("missing-init", "Missing daed init script"),
+            ("restart-failed", "Failed to restart daed"),
+            ("recovery-timeout", "daed did not recover"),
+        )
+        for mode, expected_error in cases:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp_s:
+                tmp = Path(tmp_s)
+                bin_dir = tmp / "bin"
+                bin_dir.mkdir()
+                request_log = tmp / "requests.log"
+                restart_marker = tmp / "restarted"
+                make_executable(
+                    bin_dir / "uci",
+                    "#!/bin/sh\n"
+                    "case \"$*\" in\n"
+                    "  *daed.config.listen_addr*) echo 127.0.0.1:2023 ;;\n"
+                    "  *daed.config.dashboard_username*) echo admin ;;\n"
+                    "  *daed.config.dashboard_password*) echo REDACTED_PASSWORD ;;\n"
+                    "  *) exit 1 ;;\n"
+                    "esac\n",
+                )
+                make_executable(bin_dir / "pidof", "#!/bin/sh\nexit 0\n")
+                make_executable(bin_dir / "ucode", "#!/bin/sh\nexec \"$@\"\n")
+                make_executable(bin_dir / "sleep", "#!/bin/sh\nexit 0\n")
+                make_executable(
+                    bin_dir / "plan",
+                    "#!/bin/sh\n"
+                    "printf '%s' '{\"subId\":\"sub1\",\"groupId\":\"group1\",\"subscriptionAttached\":false,\"subscriptionFilterRegex\":\"\",\"desiredCount\":1,\"excludedCount\":1,\"addCount\":1,\"staleCount\":0,\"addIds\":[\"new1\"],\"staleIds\":[]}'\n",
+                )
+                make_executable(
+                    bin_dir / "jsonfilter",
+                    "#!/bin/sh\n"
+                    "expression=''\n"
+                    "while [ \"$#\" -gt 0 ]; do case \"$1\" in -e) expression=$2; shift 2 ;; *) shift ;; esac; done\n"
+                    "case \"$expression\" in\n"
+                    "  @.data.token) echo token ;; @.subId) echo sub1 ;; @.groupId) echo group1 ;;\n"
+                    "  @.desiredCount) echo 1 ;; @.excludedCount) echo 1 ;; @.subscriptionAttached) echo false ;;\n"
+                    "  @.subscriptionFilterRegex) echo '' ;; @.addIds) echo '[\"new1\"]' ;;\n"
+                    "  @.staleIds) echo '[]' ;; @.addCount) echo 1 ;; @.staleCount) echo 0 ;;\n"
+                    "esac\n",
+                )
+                make_executable(
+                    bin_dir / "curl",
+                    "#!/bin/sh\n"
+                    "body=''\n"
+                    "while [ \"$#\" -gt 0 ]; do case \"$1\" in --data-binary) body=${2#@}; shift 2 ;; -H|--max-time) shift 2 ;; -*) shift ;; *) shift ;; esac; done\n"
+                    "if grep -q 'query Token' \"$body\"; then\n"
+                    "  [ -e \"$RESTART_MARKER\" ] && exit 22\n"
+                    "  printf '%s' '{\"data\":{\"token\":\"token\"}}'; exit 0\n"
+                    "fi\n"
+                    "if grep -q 'query SyncState' \"$body\"; then printf '%s' '{\"data\":{\"subscriptions\":[],\"groups\":[]}}'; exit 0; fi\n"
+                    "if grep -q 'groupAddNodes' \"$body\"; then echo add >> \"$REQUEST_LOG\"; fi\n"
+                    "if grep -q 'groupDelNodes' \"$body\"; then echo rollback-remove >> \"$REQUEST_LOG\"; fi\n"
+                    "if grep -q '\"dry\":true' \"$body\"; then echo validate >> \"$REQUEST_LOG\"; fi\n"
+                    "printf '%s' '{\"data\":{\"ok\":true}}'\n",
+                )
+                daed_init = bin_dir / "daed-init"
+                if mode == "restart-failed":
+                    make_executable(
+                        daed_init,
+                        "#!/bin/sh\n: > \"$RESTART_MARKER\"\nexit 1\n",
+                    )
+                elif mode == "recovery-timeout":
+                    make_executable(
+                        daed_init,
+                        "#!/bin/sh\n: > \"$RESTART_MARKER\"\nexit 0\n",
+                    )
+                result = subprocess.run(
+                    [FILTER_SYNC, "primary", "proxy", "备用"],
+                    env={
+                        **os.environ,
+                        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                        "REQUEST_LOG": str(request_log),
+                        "RESTART_MARKER": str(restart_marker),
+                        "DAED_PLAN_HELPER": str(bin_dir / "plan"),
+                        "DAED_SYNC_LOCK": str(tmp / "filter.lock"),
+                        "DAED_FILTER_LOG": str(tmp / "filter.log"),
+                        "DAED_FILTER_DAED_INIT": str(daed_init),
+                        "DAED_FILTER_SLEEP": str(bin_dir / "sleep"),
+                        "DAED_FILTER_RESTART_ATTEMPTS": "2",
+                        "DAED_SKIP_UPDATE": "1",
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+                self.assertEqual(
+                    request_log.read_text(encoding="utf-8").splitlines(),
+                    ["add", "validate", "rollback-remove"],
+                )
 
     def test_daed_configure_requires_luci_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
@@ -855,7 +1094,7 @@ exit 0
             self.assertIn("category-ai-!cn", requests)
             self.assertIn("min_moving_avg", requests)
             self.assertIn('"dry":true', requests)
-            self.assertIn('"dry":false', requests)
+            self.assertNotIn('"dry":false', requests)
             calls = uci_log.read_text(encoding="utf-8")
             self.assertIn("set bypass_router.daed.subscription_tag=primary", calls)
             self.assertIn("set bypass_router.daed.direct_resolver=192.0.2.53", calls)

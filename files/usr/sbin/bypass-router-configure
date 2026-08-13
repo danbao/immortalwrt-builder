@@ -3,7 +3,7 @@
 set -eu
 
 INIT_DIR="${BYPASS_INIT_DIR:-/etc/init.d}"
-DEFAULT_BRIDGE_PORTS='eth0,eth1'
+DEFAULT_BRIDGE_PORTS='eth0,eth1,eth2,eth3,eth4,eth5'
 
 fail() {
 	printf 'ERROR: %s\n' "$*" >&2
@@ -87,6 +87,10 @@ uci -q set "bypass_router.main.staging_ip=${staging_ip}"
 uci -q set "bypass_router.main.target_ip=${target_ip}"
 uci -q set "bypass_router.main.gateway=${gateway}"
 uci -q set "bypass_router.main.trusted_cidr=${trusted_cidr}"
+uci -q delete bypass_router.main.bridge_port
+for port in "$@"; do
+	uci -q add_list "bypass_router.main.bridge_port=${port}"
+done
 uci -q commit bypass_router
 
 bridge_section="$(uci -q show network | sed -n "s/^\(network\.[^.]*\)\.name='br-lan'$/\1/p" | head -n 1)"

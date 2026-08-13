@@ -2,7 +2,7 @@
 
 自动构建适用于 x86_64 虚拟化环境的 ImmortalWrt 固件，并发布 raw `.img.gz` 和可导入 ESXi 的 OVA。
 
-当前旁路由迁移流程是先用临时地址灰度运行，再在维护窗口接通第二条 VMware 链路并接管旧机地址。OVA 默认只包含一张 VMXNET3 网卡；第二张网卡需要在 VMware 中手动添加，并连接到旧 VM 第二张网卡所在的 Port Group。
+当前旁路由迁移流程是先用临时地址灰度运行，再在维护窗口接通需要承载 LAN 的物理链路并接管旧机地址。OVA 默认只包含一张 VMXNET3 网卡；本项目的六口默认拓扑要求虚拟机另外暴露五张网卡（例如 PCI 直通的 IGC 网卡），并在控制台确认它们依次命名为 `eth1`～`eth5`。未使用的备用口可以不插网线，但接口本身必须存在。
 
 本项目使用 ImmortalWrt ImageBuilder，不从源码完整编译发行版。默认生成两个 flavor：
 
@@ -18,26 +18,26 @@
 ```sh
 /usr/sbin/bypass-router-configure \
   '<STAGING_IP>' '<TARGET_IP>' '<GATEWAY_IP>' '<TRUSTED_MANAGEMENT_CIDR>' \
-  --ports 'eth0,eth1' --confirm
+  --confirm
 ```
 
 该命令会应用以下无秘密配置：
 
 - LAN 使用临时地址，网关和 DNS 使用主路由地址；目标地址只保存给切换脚本。
-- `--ports` 指定的接口加入启用 STP 的 `br-lan`，省略时默认为 `eth0,eth1`；端口列表属于现场配置，不写入镜像。
+- `--ports` 指定的接口加入启用 STP 的 `br-lan`，省略时默认为 `eth0`～`eth5`；六口默认值写入镜像，实际期望端口同时保存到 `bypass_router.main.bridge_port` 供切换检查。仅在硬件端口布局不同时显式覆盖。
 - DHCP、DHCPv6、RA 和流量卸载保持关闭。
-- MosDNS 监听 `0.0.0.0:5335`，dnsmasq 转发到本机 MosDNS；国内 DNS 使用阿里与腾讯，国外 DoH 使用 Google 与 Cloudflare，不包含 Quad9。
+- MosDNS 仅监听 `127.0.0.1:5335`，dnsmasq 转发到本机 MosDNS；国内 DNS 使用阿里与腾讯，国外 DoH 使用 Google 与 Quad9。
 - LuCI 在 LAN 地址提供 HTTPS，HTTP 仅重定向；daed 面板只绑定 LAN 地址的 `2023` 端口。SSH、LuCI 和 daed 管理端口仅允许指定可信管理网段访问。
 - 系统日志缓冲区为 1 MiB，匿名磁盘挂载关闭。
 
 推荐切换顺序：
 
-1. 关机导入 OVA，将默认网卡连接到旧 VM 第一张网卡所在的 Port Group。暂时不要添加或接通第二张网卡。
+1. 关机导入 OVA，将默认的 `eth0` VMXNET3 网卡连接到管理/LAN Port Group；再添加或直通另外五张网卡，并在控制台用 `ip -br link` 确认 `eth0`～`eth5` 全部存在。维护窗口前，暂时不要给可能连接旧桥的物理口插线。
 2. 在 VMware 控制台运行上述初始化命令，然后访问临时地址的 HTTPS 管理页。首次证书是设备自签名证书。
 3. 设置 root 强密码，写入并实际验证 `/etc/dropbear/authorized_keys` 中的 SSH 公钥。
 4. 临时将一台客户端的旁路由、DNS 和代理目标改为临时地址，通过第一张网卡验证 MosDNS 和 daed 的真实流量。
-5. 进入维护窗口，保留 VMware 快照和控制台，先关闭旧机，再为新 VM 添加第二张 VMXNET3 网卡，连接到旧 VM 第二张网卡所在的 Port Group。不要让旧、新两台二层桥同时连接这对 Port Group。
-6. 在新机运行 `/usr/sbin/bypass-router-cutover check`。该检查要求 `br-lan` 至少有两个有载波的端口，而且两个端口在 3 秒采样期内都有流量；无流量时先从两侧各制造一次测试流量再重试。
+5. 进入维护窗口，保留 VMware 快照和控制台，先关闭旧机，再接通 `eth1`～`eth5` 中需要承载 LAN 的物理链路。不要让旧、新两台二层桥同时连接相同网络，也不要把不同二层网络或可能成环的链路同时接入六口桥。
+6. 在新机运行 `/usr/sbin/bypass-router-cutover check`。该检查要求所有期望端口均已加入 `br-lan`，至少两个端口有载波，且在线端口在 3 秒采样期内都有流量；未插线的备用端口不会阻塞切换。无流量时先从在线端口两侧各制造一次测试流量再重试。
 7. 确认旧地址不再响应后运行 `/usr/sbin/bypass-router-cutover apply --confirm`。SSH 会断开，随后从目标地址的 HTTPS 管理页重连。
 8. 再次验证客户端 DNS、透明代理、跨 Port Group 流量和回滚路径，稳定后才移除旧 VM。
 9. 公钥登录确认无误后运行 `/usr/sbin/bypass-router-harden`，关闭 root 密码 SSH，并停用 LuCI 明文 HTTP。
