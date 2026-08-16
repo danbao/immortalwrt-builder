@@ -52,10 +52,8 @@ def sanitize_tag_component(value: str) -> str:
 
 
 def release_display_name(base_name: str) -> str:
-    if base_name == "immortalwrt-x86-64-daed":
-        return "ImmortalWrt x86_64 daed"
-    if base_name == "immortalwrt-x86-64":
-        return "ImmortalWrt x86_64"
+    if base_name == "immortalwrt-x86-generic":
+        return "ImmortalWrt x86/generic"
     return base_name
 
 
@@ -183,11 +181,11 @@ def make_ovf(name: str, vmdk_name: str, vmdk_size: int, disk_capacity: int, nic_
 {network_section}
   </NetworkSection>
   <VirtualSystem ovf:id="{escaped_name}">
-    <Info>OpenWrt virtual machine</Info>
+    <Info>ImmortalWrt virtual machine</Info>
     <Name>{escaped_name}</Name>
-    <OperatingSystemSection ovf:id="100" vmw:osType="otherLinux64Guest">
-      <Info>OpenWrt x86_64</Info>
-      <Description>OpenWrt x86_64</Description>
+    <OperatingSystemSection ovf:id="100" vmw:osType="otherLinuxGuest">
+      <Info>ImmortalWrt x86</Info>
+      <Description>ImmortalWrt x86/generic</Description>
     </OperatingSystemSection>
     <VirtualHardwareSection>
       <Info>Virtual hardware requirements</Info>

@@ -25,47 +25,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Build pinned ucode compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libjson-c-dev zlib1g-dev
-          scripts/install-host-ucode.sh "${GITHUB_WORKSPACE}/.ci-tools"
-          echo "UCODE_BIN=${GITHUB_WORKSPACE}/.ci-tools/bin/ucode" >> "${GITHUB_ENV}"
-
-      - name: Validate Python
+      - name: Validate repository
         run: |
           python3 -m py_compile scripts/*.py
           python3 -m unittest discover -s tests
-
-      - name: Validate ucode
-        run: |
-          "${UCODE_BIN}" -c files/usr/libexec/immortalwrt-updater-plan.uc
-          "${UCODE_BIN}" -c files/usr/share/rpcd/ucode/immortalwrt-updater.uc
-
-      - name: Validate LuCI and RPC data
-        run: |
-          node --check files/www/luci-static/resources/view/system/immortalwrt-updater.js
-          jq empty files/usr/share/rpcd/acl.d/immortalwrt-updater.json \
-            files/usr/share/luci/menu.d/immortalwrt-updater.json
-
-      - name: Validate workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-
-      - name: Validate shell
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
-          shellcheck \
-            scripts/install-host-ucode.sh \
-            files/etc/uci-defaults/99-bypass-router.sh \
-            files/etc/hotplug.d/iface/99-bypass-router-hardening \
-            files/etc/init.d/bypass-router-hardening \
-            files/usr/sbin/bypass-router-configure \
-            files/usr/sbin/bypass-router-cutover \
-            files/usr/sbin/bypass-router-harden \
-            files/usr/sbin/bypass-router-apply-sysctl \
-            files/usr/sbin/immortalwrt-updater \
-            files/usr/sbin/bypass-router-daed-configure \
-            files/usr/share/luci-app-daede/daed-filter-sync.sh \
-            files/usr/local/sbin/daed-subscription-sync \
-            files/usr/local/sbin/mosdns-geo-update-verified
+          jq empty config/third-party-components.json
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7

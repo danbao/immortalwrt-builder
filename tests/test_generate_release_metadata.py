@@ -11,60 +11,42 @@ import generate_release_metadata as metadata
 
 
 class GenerateReleaseMetadataTests(unittest.TestCase):
-    def test_load_firmware_identity_requires_matching_flavor_and_target(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_s:
-            path = Path(tmp_s) / "identity.json"
-            payload = {
-                "schema_version": 1,
-                "repository": "danbao/immortalwrt-builder",
-                "flavor": "daed",
-                "target": "x86/64",
-                "identity_sha256": "a" * 64,
-            }
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            self.assertEqual(metadata.load_firmware_identity(path, "daed"), payload)
-            with self.assertRaisesRegex(ValueError, "standard"):
-                metadata.load_firmware_identity(path, "standard")
-
-    def test_build_metadata_schema_rejects_wrong_target_and_release_family(self) -> None:
+    def test_build_metadata_schema_requires_generic_target_and_release_family(self) -> None:
         payload = {
             "schema_version": 2,
             "repository": "danbao/immortalwrt-builder",
-            "flavor": "daed",
-            "target": "x86/64",
-            "firmware_identity": {"flavor": "daed", "target": "x86/64"},
+            "target": "x86/generic",
             "release": {
-                "release_tag": "openwrt-immortalwrt-x86-64-daed-20260810-a-bbbbbbbbbbbb",
+                "release_tag": "openwrt-immortalwrt-x86-generic-20260810-a-bbbbbbbbbbbb",
                 "image_sha256": "a" * 64,
             },
         }
-        metadata.validate_build_metadata(payload, "daed")
+        metadata.validate_build_metadata(payload)
         payload["target"] = "armsr/armv8"
         with self.assertRaisesRegex(ValueError, "schema validation"):
-            metadata.validate_build_metadata(payload, "daed")
-        payload["target"] = "x86/64"
+            metadata.validate_build_metadata(payload)
+        payload["target"] = "x86/generic"
         payload["release"]["release_tag"] = "openwrt-immortalwrt-x86-64-20260810-a-bbbbbbbbbbbb"
         with self.assertRaisesRegex(ValueError, "schema validation"):
-            metadata.validate_build_metadata(payload, "daed")
+            metadata.validate_build_metadata(payload)
 
-    def test_release_item_for_flavor_uses_exact_tag_and_full_image_sha(self) -> None:
+    def test_release_item_requires_one_result_and_uses_full_image_sha(self) -> None:
         results = {
             "built": [
                 {
-                    "release_tag": "openwrt-immortalwrt-x86-64-20260726-cf123-aaaaaaaaaaaa",
+                    "release_tag": "openwrt-immortalwrt-x86-generic-20260726-cf123-aaaaaaaaaaaa",
                     "image_sha256": "a" * 64,
-                },
-                {
-                    "release_tag": "openwrt-immortalwrt-x86-64-daed-20260726-cf123-bbbbbbbbbbbb",
-                    "image_sha256": "b" * 64,
-                },
+                }
             ]
         }
-        standard = metadata.release_item_for_flavor(results, "standard")
-        daed = metadata.release_item_for_flavor(results, "daed")
-        self.assertEqual(standard["image_sha256"], "a" * 64)
-        self.assertIn(daed["release_tag"], metadata.spdx_namespace("danbao/immortalwrt-builder", daed))
-        self.assertIn("b" * 64, metadata.spdx_namespace("danbao/immortalwrt-builder", daed))
+        item = metadata.release_item(results)
+        self.assertEqual(item["image_sha256"], "a" * 64)
+        namespace = metadata.spdx_namespace("danbao/immortalwrt-builder", item)
+        self.assertIn(item["release_tag"], namespace)
+        self.assertIn("a" * 64, namespace)
+        results["built"].append(dict(item))
+        with self.assertRaisesRegex(ValueError, "expected one"):
+            metadata.release_item(results)
 
     def test_parse_package_manifest_reads_name_and_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
@@ -151,17 +133,18 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
         registry = {
             "components": [
                 {
-                    "name": "PassWall 2",
-                    "license": "GPL-3.0-only",
-                    "source": "https://github.com/Openwrt-Passwall/openwrt-passwall2",
-                    "packages": ["luci-app-passwall2"],
+                    "name": "ImmortalWrt autocore",
+                    "license": "GPL-2.0-only",
+                    "source": "https://github.com/immortalwrt/immortalwrt",
+                    "source_path": "package/emortal/autocore",
+                    "packages": ["autocore"],
                 }
             ],
         }
-        self.assertEqual(metadata.component_for_package("luci-app-passwall2", registry)["name"], "PassWall 2")
+        self.assertEqual(metadata.component_for_package("autocore", registry)["name"], "ImmortalWrt autocore")
         self.assertIsNone(metadata.component_for_package("curl", registry))
         exact_source = (
-            "https://github.com/Openwrt-Passwall/openwrt-passwall2/tree/v1.2.3"
+            "https://github.com/immortalwrt/immortalwrt/tree/" + "a" * 40
         )
         self.assertEqual(
             metadata.exact_component_source(
@@ -169,13 +152,13 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 {
                     "components": {
                         registry["components"][0]["source"]: {
-                            "ref": "v1.2.3",
+                            "ref": "a" * 40,
                             "source": exact_source,
                         },
                     }
                 },
             ),
-            exact_source,
+            f"{exact_source}/package/emortal/autocore",
         )
         with self.assertRaisesRegex(ValueError, "missing exact source ref"):
             metadata.exact_component_source(registry["components"][0], {"components": {}})
@@ -238,7 +221,7 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 namespace="https://example.test/spdx",
             )
 
-    def test_generate_spdx_contains_both_flavors(self) -> None:
+    def test_generate_spdx_contains_official_manifest_packages(self) -> None:
         registry = {"components": []}
         package_index = {
             ("luci", "1.0"): [{
@@ -246,10 +229,10 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 "source_path": "feeds/luci/luci",
                 "download_url": "https://downloads.example/luci.ipk",
             }],
-            ("daed", "2.0"): [{
-                "license": "AGPL-3.0-only",
-                "source_path": "feeds/packages/daed",
-                "download_url": "https://downloads.example/daed.ipk",
+            ("base-files", "2.0"): [{
+                "license": "GPL-2.0-only",
+                "source_path": "feeds/base/base-files",
+                "download_url": "https://downloads.example/base-files.apk",
             }],
         }
         source_refs = {
@@ -263,7 +246,7 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
             "components": {},
         }
         document = metadata.generate_spdx(
-            {"luci": "1.0", "daed": "2.0"},
+            {"luci": "1.0", "base-files": "2.0"},
             registry,
             package_index,
             source_refs,
@@ -271,7 +254,7 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(document["spdxVersion"], "SPDX-2.3")
         names = {package["name"] for package in document["packages"]}
-        self.assertEqual(names, {"luci", "daed"})
+        self.assertEqual(names, {"luci", "base-files"})
 
     def test_exact_index_source_maps_base_feed_to_core_package_tree(self) -> None:
         core_source = f"https://github.com/immortalwrt/immortalwrt/tree/{'a' * 40}"

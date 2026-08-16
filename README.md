@@ -1,167 +1,36 @@
 # ImmortalWrt Builder
 
-自动构建适用于 x86_64 虚拟化环境的 ImmortalWrt 固件，并发布 raw `.img.gz` 和可导入 ESXi 的 OVA。
+使用官方 ImageBuilder 自动构建 ImmortalWrt 25.12.1 `x86/generic` 固件，并生成 raw `.img.gz`、ESXi OVA、构建元数据和 SPDX 2.3 软件包清单。
 
-当前旁路由迁移流程是先用临时地址灰度运行，再在维护窗口接通需要承载 LAN 的物理链路并接管旧机地址。OVA 默认只包含一张 VMXNET3 网卡；本项目的六口默认拓扑要求虚拟机另外暴露五张网卡（例如 PCI 直通的 IGC 网卡），并在控制台确认它们依次命名为 `eth1`～`eth5`。未使用的备用口可以不插网线，但接口本身必须存在。
+## 构建原则
 
-本项目使用 ImmortalWrt ImageBuilder，不从源码完整编译发行版。默认生成两个 flavor：
+- 固件使用官方 `generic` profile 的默认软件包集合。
+- 不传入自定义 `PACKAGES`，不注入 `FILES` 覆盖。
+- 不包含第三方代理、DNS 插件或本仓库的旁路由运行时配置。
+- 不下载或安装第三方代理、DNS、LuCI 插件。
+- ImageBuilder 下载必须通过官方 `sha256sums` 校验。
 
-- `standard`：PassWall 2、OpenClash、Nikki、MosDNS 等常用旁路由组件。
-- `daed`：使用 `dae`/`daed`，不包含与其冲突的透明代理栈。
+官方发布目录：<https://downloads.immortalwrt.org/releases/25.12.1/targets/x86/generic/>
 
-两个 flavor 都保留 Tailscale 远程访问和 KMS 激活组件，移除未使用的 ZeroTier 与 MiniUPnP，并默认包含 `luci-ssl`。Tailscale 安装后默认停用，登录并确认用途后再手工启用。daed 替换场景优先使用 `daed` flavor，别把几套透明代理栈塞进一台机器互相踩 nftables 规则。
+## 自动构建
 
-## 替换旧旁路由
+GitHub Actions 每天北京时间 02:00 执行构建，也可以手动运行。手动运行默认只上传短期 Actions artifact；只有明确设置 `publish_release=true` 才发布 GitHub Release。
 
-固件不会包含现场 IP，也不会直接抢占旧机地址。首次启动后先从 VMware 控制台执行一次（把尖括号占位符替换为现场值）：
+每次构建执行以下流程：
 
-```sh
-/usr/sbin/bypass-router-configure \
-  '<STAGING_IP>' '<TARGET_IP>' '<GATEWAY_IP>' '<TRUSTED_MANAGEMENT_CIDR>' \
-  --confirm
-```
+1. 获取并校验 ImmortalWrt 25.12.1 `x86/generic` ImageBuilder。
+2. 使用 `make manifest PROFILE="generic"` 记录官方默认软件包。
+3. 使用 `make image PROFILE="generic"` 构建固件。
+4. 复制 raw 镜像并转换为单网卡 VMXNET3 ESXi OVA。
+5. 生成构建元数据、上游来源记录和 SPDX 软件包清单。
+6. 对发布产物生成 GitHub artifact attestation。
 
-该命令会应用以下无秘密配置：
-
-- LAN 使用临时地址，网关和 DNS 使用主路由地址；目标地址只保存给切换脚本。
-- `--ports` 指定的接口加入启用 STP 的 `br-lan`，省略时默认为 `eth0`～`eth5`；六口默认值写入镜像，实际期望端口同时保存到 `bypass_router.main.bridge_port` 供切换检查。仅在硬件端口布局不同时显式覆盖。
-- DHCP、DHCPv6、RA 和流量卸载保持关闭。
-- MosDNS 仅监听 `127.0.0.1:5335`，dnsmasq 转发到本机 MosDNS；国内 DNS 使用阿里与腾讯，国外 DoH 使用 Google 与 Quad9。
-- LuCI 在 LAN 地址提供 HTTPS，HTTP 仅重定向；daed 面板只绑定 LAN 地址的 `2023` 端口。SSH、LuCI 和 daed 管理端口仅允许指定可信管理网段访问。
-- 系统日志缓冲区为 1 MiB，匿名磁盘挂载关闭。
-
-推荐切换顺序：
-
-1. 关机导入 OVA，将默认的 `eth0` VMXNET3 网卡连接到管理/LAN Port Group；再添加或直通另外五张网卡，并在控制台用 `ip -br link` 确认 `eth0`～`eth5` 全部存在。维护窗口前，暂时不要给可能连接旧桥的物理口插线。
-2. 在 VMware 控制台运行上述初始化命令，然后访问临时地址的 HTTPS 管理页。首次证书是设备自签名证书。
-3. 设置 root 强密码，写入并实际验证 `/etc/dropbear/authorized_keys` 中的 SSH 公钥。
-4. 临时将一台客户端的旁路由、DNS 和代理目标改为临时地址，通过第一张网卡验证 MosDNS 和 daed 的真实流量。
-5. 进入维护窗口，保留 VMware 快照和控制台，先关闭旧机，再接通 `eth1`～`eth5` 中需要承载 LAN 的物理链路。不要让旧、新两台二层桥同时连接相同网络，也不要把不同二层网络或可能成环的链路同时接入六口桥。
-6. 在新机运行 `/usr/sbin/bypass-router-cutover check`。该检查要求所有期望端口均已加入 `br-lan`，至少两个端口有载波，且在线端口在 3 秒采样期内都有流量；未插线的备用端口不会阻塞切换。无流量时先从在线端口两侧各制造一次测试流量再重试。
-7. 确认旧地址不再响应后运行 `/usr/sbin/bypass-router-cutover apply --confirm`。SSH 会断开，随后从目标地址的 HTTPS 管理页重连。
-8. 再次验证客户端 DNS、透明代理、跨 Port Group 流量和回滚路径，稳定后才移除旧 VM。
-9. 公钥登录确认无误后运行 `/usr/sbin/bypass-router-harden`，关闭 root 密码 SSH，并停用 LuCI 明文 HTTP。
-
-加固脚本还会把 LAN 输入策略改为拒绝，仅放行初始化时记录的可信 `/24`
-网段访问 DNS、SSH、LuCI HTTPS、daed、KMS 和必要 ICMP；MosDNS 只监听
-回环地址，daed 只监听 LAN IPv4。IPv6 由上游主路由直连，不属于 dae 的代理
-保证范围。
-
-`check` 只验证链路、实时流量和进程状态，无法替代第 4 步的真实客户端灰度。`apply` 在发现目标地址仍被占用时会拒绝接管，避免地址冲突。
-
-镜像扩容后出现“backup GPT invalid”时，先创建 VMware 快照并确认控制台可用，再用磁盘工具把备份 GPT 移到磁盘末尾；这是会改分区表的维护操作，不由首次启动脚本自动执行。`sda128` 是 BIOS 引导保留分区，不是数据盘损坏，固件已经关闭 `anon_mount`，不会再把它当 exFAT 自动挂载。
-
-## 当前版本边界
-
-构建默认使用 ImmortalWrt 25.12.1 的 `x86/64` ImageBuilder。第三方组件统一选用 OpenWrt 25.12 对应的 x86_64 APK 资产；官方仓库签名仍由 ImageBuilder 自带密钥校验，本地附加 APK 会由 ImageBuilder 建立并签署独立索引。Tailscale 使用 25.12.1 官方包，避免旧第三方 LuCI 包与官方服务脚本冲突。
-
-25.12 已从 opkg 切换到 apk，旧系统不应直接在线执行跨大版本全量包升级。替换旧旁路由时应使用本项目生成的新镜像并重新验证配置，保留 VMware 快照和旧 VM 回退路径。
-
-每次发布仍须在独立构建中同时验证：ImageBuilder target/profile、MosDNS、daed/daede、Nikki/PassWall、APK 包解析、过滤脚本和 OVA 启动。禁止在现用旁路由上在线跨大版本升级。
-
-## 构建计划
-
-GitHub Actions 每天北京时间 02:00 自动执行构建。手动运行默认只生成短期 Actions artifact；只有明确选择 `publish_release=true` 才发布 Release。
-
-定时构建通过全部检查后会自动发布。相同 flavor 和镜像 SHA 已存在于受管 Release 时不会重复发布。
-
-## Release 资产
-
-每个 flavor 使用独立 Release，并包含：
-
-- `.img.gz`：PVE、裸盘或其他 raw image 场景。
-- `.ova` 与 `.ova.sha256`：ESXi 导入和完整性校验。
-- `build-metadata.json`：ImageBuilder、ImmortalWrt commit 和构建结果。
-- `packages.spdx.json`：实际 ImageBuilder manifest 生成的 SPDX 2.3 包清单。
-- `upstream-provenance.json`：官方 APK 索引、第三方 Release tag、asset ID、digest 和降级校验状态。
-- `third-party-sources.json`：第三方组件的许可证及源码位置。
-- GitHub artifact attestation：raw image 和 OVA 的构建来源证明。
-
-### 路由器内更新
-
-daed 固件包含“系统 → 固件更新”页面和 `/usr/sbin/immortalwrt-updater`：
+## 本地验证
 
 ```sh
-immortalwrt-updater status
-immortalwrt-updater check [--refresh]
-immortalwrt-updater download
-immortalwrt-updater verify
-immortalwrt-updater upgrade --snapshot-confirmed
-```
-
-更新源固定为本仓库非草稿、非预发布的 daed x86/64 Release。更新器强制核对
-GitHub asset digest、`build-metadata.json`、`.sha256` 和实际镜像哈希，并要求
-`sysupgrade -T` 通过。每天 04:30 只检查版本，不会自动刷写；安装前必须创建
-VMware 快照并显式确认。官方 `owut`/Attended Sysupgrade 不适用于这套自定义
-Release 源。
-
-每个新镜像内置确定性固件身份，由 builder commit、ImageBuilder、ImmortalWrt、
-包清单和上游 provenance 共同计算。构建输入没有变化时不会产生伪更新。旧镜像
-首次使用更新器时会显示身份未知，完成一次受信升级后即可执行重复更新与降级保护。
-
-## 供应链边界
-
-ImageBuilder 使用 ImmortalWrt 官方 SHA256 校验。GitHub Release 依赖会先解析本次 `latest` 的 tag 和 asset ID，再按 asset ID 下载；API 提供 SHA256 digest 时强制校验，下载期间元数据发生变化时构建失败。
-
-第三方 feed 不会被加入 ImageBuilder，也不会关闭官方仓库的 APK 签名校验。官方包元数据由 ImageBuilder 自带密钥验证；第三方包从已检查的 GitHub Release 资产下载到本地 `packages/`，API 提供 digest 时强制校验，没有 digest 时明确记录为 `unverified-upstream`。ImageBuilder 会为本地 APK 建立并签署独立索引。**这些记录是风险披露，不代表上游内容安全。** 对供应链要求严格的使用者应检查随 Release 发布的 provenance，或自行固定依赖后构建。
-
-## 首次启动安全
-
-项目不会注入密码、SSH key、VPN 配置、代理订阅、daed 凭据或其他运行时秘密，也不会从运行中的路由器导出这些内容。固件沿用 ImmortalWrt/OpenWrt 的首次启动认证行为：
-
-1. 仅在可信 LAN 中首次启动。
-2. 立即设置强 root 密码。
-3. 配置完成前不要把 LuCI、SSH 或代理管理端口暴露到 WAN。
-4. 导入前校验 SHA256，并验证 GitHub artifact attestation。
-
-## 本地检查
-
-```bash
 python3 -m py_compile scripts/*.py
 python3 -m unittest discover -s tests
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-shellcheck scripts/install-host-ucode.sh \
-  files/etc/uci-defaults/99-bypass-router.sh
-shellcheck files/usr/sbin/bypass-router-configure \
-  files/usr/sbin/bypass-router-cutover \
-  files/usr/sbin/bypass-router-harden \
-  files/usr/sbin/bypass-router-apply-sysctl \
-  files/usr/sbin/immortalwrt-updater \
-  files/usr/sbin/bypass-router-daed-configure \
-  files/usr/share/luci-app-daede/daed-filter-sync.sh \
-  files/usr/local/sbin/daed-subscription-sync \
-  files/usr/local/sbin/mosdns-geo-update-verified
 ```
 
-### daed 订阅名称过滤
-
-`daed` 的群组 API 不能直接为整条订阅设置名称排除规则。固件中包含
-`/usr/share/luci-app-daede/daed-filter-sync.sh`，用于更新持久订阅后，把符合条件的节点逐个同步到群组。
-
-在 LuCI 中设置 daed 管理账号并导入订阅后，执行一次公开默认初始化：
-
-```sh
-/usr/sbin/bypass-router-daed-configure '<SUBSCRIPTION_TAG>' \
-  --resolver '<DIRECT_DNS_IPV4>' --confirm
-```
-
-`--resolver` 可以省略，此时使用 `network.lan.dns` 的第一个地址。命令会创建或更新
-`proxy` 组、应用 `min_moving_avg` 和通用 AI 代理规则，并在首次同步成功后安装每六小时执行的 cron。
-
-长期同步入口为 `/usr/local/sbin/daed-subscription-sync`。它从本机 daed 读取已有订阅链接，
-直连下载到权限受限的临时文件，临时切换链接并更新原订阅，然后无论成功失败都恢复远端链接。
-过滤会排除名称含“备用”的节点及 `http/https` 假节点；具体订阅 URL、账号、密码、解析器和节点名单
-只存在于部署设备。临时手工移除的节点可能在下一次同步时重新加入。
-
-MosDNS GeoIP/GeoSite 每周日 03:00 由 `/usr/local/sbin/mosdns-geo-update-verified`
-更新。脚本要求 GitHub Release 提供 SHA256 digest，两个数据文件全部校验成功后才一起替换；失败时保留旧数据。
-
-本地转换还需要 `qemu-img`。Ubuntu 可安装 `qemu-utils`。
-
-## 许可证与源码
-
-本仓库自有脚本、工作流和配置采用 [MIT License](LICENSE)。固件中的 ImmortalWrt、Linux 内核和第三方包分别遵循各自许可证，MIT 不覆盖这些二进制组件。
-
-第三方来源和许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 以及每个 Release 的 `third-party-sources.json`。源码位置固定到本次构建解析出的完整 commit 或 Release tag，并附可下载的源码归档 URL；精确包版本见 `packages.spdx.json`。缺少许可证或精确源码记录会阻止发布。
-
-固件按原样提供，不承诺适用于生产网络。使用者应自行评估第三方软件、出口管制、当地法律和网络安全风险。
+本仓库不保存密码、订阅、VPN 配置、SSH 密钥或现场网络信息。

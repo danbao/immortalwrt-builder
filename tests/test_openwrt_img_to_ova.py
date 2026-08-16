@@ -27,6 +27,12 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
         self.assertIn("<rasd:Connection>LAN1</rasd:Connection>", ovf)
         self.assertIn("<rasd:Connection>LAN2</rasd:Connection>", ovf)
 
+    def test_ovf_declares_32_bit_generic_guest(self) -> None:
+        ovf = openwrt_img_to_ova.make_ovf("router", "router.vmdk", 10, 20, 1)
+        self.assertIn('vmw:osType="otherLinuxGuest"', ovf)
+        self.assertIn("<Description>ImmortalWrt x86/generic</Description>", ovf)
+        self.assertNotIn("otherLinux64Guest", ovf)
+
     def test_build_workflow_requests_one_network_adapter(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build-openwrt.yml"
@@ -39,43 +45,40 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('IB_VERSION: "25.12.1"', workflow)
         self.assertNotIn("ib_version:", workflow)
-        self.assertIn("IB_TARGET: x86/64", workflow)
-        self.assertIn("IB_PACKAGE_ARCH: x86_64", workflow)
+        self.assertIn("IB_TARGET: x86/generic", workflow)
+        self.assertIn("--architecture i386_pentium4", workflow)
 
-    def test_workflows_share_the_pinned_host_ucode_installer(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        build_workflow = (root / ".github" / "workflows" / "build-openwrt.yml").read_text(
+    def test_workflow_uses_official_profile_without_package_or_file_overrides(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build-openwrt.yml"
+        ).read_text(
             encoding="utf-8"
         )
-        pull_request_workflow = (root / ".github" / "workflows" / "ci.yml").read_text(
-            encoding="utf-8"
-        )
-        invocation = 'scripts/install-host-ucode.sh "${GITHUB_WORKSPACE}/.ci-tools"'
-        self.assertIn(invocation, build_workflow)
-        self.assertIn(invocation, pull_request_workflow)
-        self.assertNotIn("imagebuilder/staging_dir/host/bin/ucode", build_workflow)
+        self.assertIn('make manifest PROFILE="generic"', workflow)
+        self.assertIn('make image PROFILE="generic"', workflow)
+        self.assertNotIn("PACKAGES=", workflow)
+        self.assertNotIn("FILES=", workflow)
+        self.assertNotIn("download-release-asset", workflow)
 
-    def test_daed_release_metadata_uses_distinct_tag_title_and_assets(self) -> None:
+    def test_generic_release_metadata_uses_single_base_family(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(
-            "immortalwrt-x86-64-daed",
+            "immortalwrt-x86-generic",
             "123abc456def",
             release_date="20260713",
             immortalwrt_commit="cf234f8de6d5",
         )
-        self.assertEqual(tag, "openwrt-immortalwrt-x86-64-daed-20260713-cf234f8de6d5-123abc456def")
-        self.assertEqual(title, "ImmortalWrt x86_64 daed ESXi OVA - 20260713 cf234f8de6d5")
-        self.assertEqual(artifact, "immortalwrt-x86-64-daed-20260713-cf234f8de6d5-123abc456def")
-
-    def test_standard_release_metadata_is_unchanged(self) -> None:
-        tag, title, artifact = openwrt_img_to_ova.release_metadata(
-            "immortalwrt-x86-64",
-            "123abc456def",
-            release_date="20260713",
-            immortalwrt_commit="cf234f8de6d5",
+        self.assertEqual(
+            tag,
+            "openwrt-immortalwrt-x86-generic-20260713-cf234f8de6d5-123abc456def",
         )
-        self.assertEqual(tag, "openwrt-immortalwrt-x86-64-20260713-cf234f8de6d5-123abc456def")
-        self.assertEqual(title, "ImmortalWrt x86_64 ESXi OVA - 20260713 cf234f8de6d5")
-        self.assertEqual(artifact, "immortalwrt-x86-64-20260713-cf234f8de6d5-123abc456def")
+        self.assertEqual(
+            title,
+            "ImmortalWrt x86/generic ESXi OVA - 20260713 cf234f8de6d5",
+        )
+        self.assertEqual(
+            artifact,
+            "immortalwrt-x86-generic-20260713-cf234f8de6d5-123abc456def",
+        )
 
 
 if __name__ == "__main__":
