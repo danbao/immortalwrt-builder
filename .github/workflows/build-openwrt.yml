@@ -21,6 +21,7 @@ concurrency:
 env:
   IB_VERSION: "25.12.1"
   IB_TARGET: x86/generic
+  BASE_PACKAGES: luci-app-vlmcsd
 
 jobs:
   build:
@@ -98,21 +99,23 @@ jobs:
             --retries 5 \
             --timeout 30
 
-      - name: Build official generic image
+      - name: Build generic image with vlmcsd
         run: |
           mkdir -p build-out
           cd imagebuilder
-          make manifest PROFILE="generic" | tee /tmp/base.packages.manifest.log
+          make manifest PROFILE="generic" PACKAGES="${BASE_PACKAGES}" | tee /tmp/base.packages.manifest.log
           awk '/^[A-Za-z0-9_.+:-]+ - / {print}' /tmp/base.packages.manifest.log \
             > "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"
           test -s "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"
+          grep -Eq '^luci-app-vlmcsd - ' "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"
+          grep -Eq '^vlmcsd - ' "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"
           forbidden_packages='^(daed|luci-app-daede|luci-app-mosdns|mosdns|luci-app-passwall2|luci-app-openclash|luci-app-nikki|luci-i18n-nikki-zh-cn|nikki|mihomo-meta|v2ray-geoip|v2ray-geosite) - '
           if grep -Eq "${forbidden_packages}" "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"; then
             echo "Official base manifest unexpectedly contains a removed proxy or DNS package:" >&2
             grep -E "${forbidden_packages}" "${GITHUB_WORKSPACE}/build-out/base.packages.manifest" >&2
             exit 1
           fi
-          make image PROFILE="generic"
+          make image PROFILE="generic" PACKAGES="${BASE_PACKAGES}"
           images=(bin/targets/"${IB_TARGET}"/*squashfs-combined-efi.img.gz)
           if [ "${#images[@]}" -ne 1 ]; then
             echo "Expected exactly one squashfs EFI image, found ${#images[@]}" >&2

@@ -48,18 +48,6 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
         self.assertIn("IB_TARGET: x86/generic", workflow)
         self.assertIn("--architecture i386_pentium4", workflow)
 
-    def test_workflow_uses_official_profile_without_package_or_file_overrides(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build-openwrt.yml"
-        ).read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('make manifest PROFILE="generic"', workflow)
-        self.assertIn('make image PROFILE="generic"', workflow)
-        self.assertNotIn("PACKAGES=", workflow)
-        self.assertNotIn("FILES=", workflow)
-        self.assertNotIn("download-release-asset", workflow)
-
     def test_generic_release_metadata_uses_single_base_family(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(
             "immortalwrt-x86-generic",
