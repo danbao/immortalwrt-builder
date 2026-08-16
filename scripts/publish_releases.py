@@ -13,20 +13,19 @@ import tempfile
 from pathlib import Path
 
 RELEASE_TAG_FAMILY_PATTERNS = (
-    ("daed", re.compile(r"^openwrt-immortalwrt-x86-64-daed-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
-    ("standard", re.compile(r"^openwrt-immortalwrt-x86-64-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
+    ("base", re.compile(r"^openwrt-immortalwrt-x86-generic-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
 )
 ASSET_NAME_PATTERN = re.compile(
-    r"^(?:immortalwrt-x86-64.*(\.img\.gz|\.ova|\.ova\.sha256)|"
-    r"immortalwrt-x86-64.*\.img\.gz\.sha256|"
+    r"^(?:immortalwrt-x86-generic.*(\.img\.gz|\.ova|\.ova\.sha256)|"
+    r"immortalwrt-x86-generic.*\.img\.gz\.sha256|"
     r"build-metadata\.json|packages\.spdx\.json|upstream-provenance\.json|"
-    r"third-party-sources\.json)$"
+    r"source-inventory\.json)$"
 )
 METADATA_ASSET_NAMES = (
     "build-metadata.json",
     "packages.spdx.json",
     "upstream-provenance.json",
-    "third-party-sources.json",
+    "source-inventory.json",
 )
 
 
@@ -131,8 +130,8 @@ def expected_asset_paths(item: dict[str, str], metadata_dir: Path) -> list[Path]
     family = managed_release_family(item["release_tag"])
     if family is None:
         raise ValueError(f"unmanaged release tag: {item['release_tag']}")
-    flavor_metadata = metadata_dir / family
-    return [ova, checksum, image, image_checksum, *(flavor_metadata / name for name in METADATA_ASSET_NAMES)]
+    release_metadata = metadata_dir / family
+    return [ova, checksum, image, image_checksum, *(release_metadata / name for name in METADATA_ASSET_NAMES)]
 
 
 def path_is_within(path: Path, root: Path) -> bool:
@@ -218,7 +217,7 @@ def publish_item(item: dict[str, str], metadata_dir: Path) -> bool:
         }
     )
     source_inventory = json.loads(
-        (metadata_dir / key[0] / "third-party-sources.json").read_text(encoding="utf-8")
+        (metadata_dir / key[0] / "source-inventory.json").read_text(encoding="utf-8")
     )
     source_refs = source_inventory.get("upstream_source_refs", {})
     for group_name in ("feeds", "components"):

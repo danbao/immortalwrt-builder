@@ -4,12 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: Publish GitHub Releases after all checks pass
+        description: Publish a GitHub Release after all checks pass
         required: true
         default: false
         type: boolean
   schedule:
-    # Run daily at 02:00 Asia/Shanghai (18:00 UTC on the previous day).
     - cron: "0 18 * * *"
 
 permissions:
@@ -21,9 +20,7 @@ concurrency:
 
 env:
   IB_VERSION: "25.12.1"
-  IB_TARGET: x86/64
-  IB_PACKAGE_ARCH: x86_64
-  OPENWRT_PACKAGE_SERIES: "25.12"
+  IB_TARGET: x86/generic
 
 jobs:
   build:
@@ -41,13 +38,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libjson-c-dev libncurses-dev zlib1g-dev gawk git gettext \
-            libssl-dev xsltproc rsync wget unzip python3 zstd qemu-utils shellcheck
+          sudo apt-get install -y qemu-utils python3 zstd
 
-      - name: Build pinned ucode compiler
+      - name: Validate repository
         run: |
-          scripts/install-host-ucode.sh "${GITHUB_WORKSPACE}/.ci-tools"
-          echo "UCODE_BIN=${GITHUB_WORKSPACE}/.ci-tools/bin/ucode" >> "${GITHUB_ENV}"
+          python3 -m py_compile scripts/*.py
+          python3 -m unittest discover -s tests
+          jq empty config/third-party-components.json
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
       - name: Download verified ImageBuilder
         run: |
@@ -68,32 +66,7 @@ jobs:
           tar --zstd -xf "${IB_ARCHIVE}"
           mv "immortalwrt-imagebuilder-${IB_VERSION}-${IB_TARGET//\//-}.Linux-x86_64" imagebuilder
 
-      - name: Validate repository and updater
-        run: |
-          test -x "${UCODE_BIN}"
-          python3 -m py_compile scripts/*.py
-          python3 -m unittest discover -s tests
-          shellcheck scripts/install-host-ucode.sh \
-            files/etc/uci-defaults/99-bypass-router.sh \
-            files/etc/hotplug.d/iface/99-bypass-router-hardening \
-            files/etc/init.d/bypass-router-hardening \
-            files/usr/sbin/bypass-router-configure \
-            files/usr/sbin/bypass-router-cutover \
-            files/usr/sbin/bypass-router-harden \
-            files/usr/sbin/bypass-router-apply-sysctl \
-            files/usr/sbin/immortalwrt-updater \
-            files/usr/sbin/bypass-router-daed-configure \
-            files/usr/share/luci-app-daede/daed-filter-sync.sh \
-            files/usr/local/sbin/daed-subscription-sync \
-            files/usr/local/sbin/mosdns-geo-update-verified
-          node --check files/www/luci-static/resources/view/system/immortalwrt-updater.js
-          "${UCODE_BIN}" -c files/usr/libexec/immortalwrt-updater-plan.uc
-          "${UCODE_BIN}" -c files/usr/share/rpcd/ucode/immortalwrt-updater.uc
-          jq empty files/usr/share/rpcd/acl.d/immortalwrt-updater.json \
-            files/usr/share/luci/menu.d/immortalwrt-updater.json
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-
-      - name: Collect release metadata
+      - name: Collect upstream metadata
         run: |
           version_code="$(curl -fsSL --retry 8 --retry-delay 5 --connect-timeout 30 "${IB_BASE_URL}/version.buildinfo" | tr -d '[:space:]')"
           immortalwrt_commit="${version_code##*-}"
@@ -101,137 +74,51 @@ jobs:
             echo "Failed to parse ImmortalWrt version.buildinfo: ${version_code}" >&2
             exit 1
           fi
+          BUILD_DATE="$(TZ=Asia/Shanghai date +%Y%m%d)"
+          IMMORTALWRT_VERSION_CODE="${version_code}"
+          IMMORTALWRT_COMMIT="${immortalwrt_commit}"
           {
-            echo "BUILD_DATE=$(TZ=Asia/Shanghai date +%Y%m%d)"
-            echo "IMMORTALWRT_VERSION_CODE=${version_code}"
-            echo "IMMORTALWRT_COMMIT=${immortalwrt_commit}"
+            echo "BUILD_DATE=${BUILD_DATE}"
+            echo "IMMORTALWRT_VERSION_CODE=${IMMORTALWRT_VERSION_CODE}"
+            echo "IMMORTALWRT_COMMIT=${IMMORTALWRT_COMMIT}"
           } >> "${GITHUB_ENV}"
-
-      - name: Disable auxiliary image formats
-        run: |
-          cd imagebuilder
-          sed -i \
-            -e 's/^CONFIG_ISO_IMAGES=y/# CONFIG_ISO_IMAGES is not set/' \
-            -e 's/^CONFIG_QCOW2_IMAGES=y/# CONFIG_QCOW2_IMAGES is not set/' \
-            -e 's/^CONFIG_VDI_IMAGES=y/# CONFIG_VDI_IMAGES is not set/' \
-            -e 's/^CONFIG_VMDK_IMAGES=y/# CONFIG_VMDK_IMAGES is not set/' \
-            -e 's/^CONFIG_VHDX_IMAGES=y/# CONFIG_VHDX_IMAGES is not set/' \
-            -e 's/^CONFIG_TARGET_ROOTFS_EXT4FS=y/# CONFIG_TARGET_ROOTFS_EXT4FS is not set/' \
-            .config
-
-      - name: Download inspected release assets
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          cd imagebuilder
-          mkdir -p packages packages-daed
-          download_asset() {
-            python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
-              --repo "$1" \
-              --pattern "$2" \
-              --dir "$3" \
-              --provenance "${GITHUB_WORKSPACE}/dist/metadata/upstream-provenance.json" \
-              --allow-missing-digest \
-              --asset-wait-attempts 30 \
-              --asset-wait-delay 10 \
-              --retries 8 \
-              --timeout "$4"
-          }
-          mkdir -p "${GITHUB_WORKSPACE}/dist/metadata"
-          download_asset Openwrt-Passwall/openwrt-passwall2 'luci-app-passwall2-*.apk' packages 60
-          download_asset vernesong/OpenClash 'luci-app-openclash-*.apk' packages 60
-          mosdns_archive="${IB_PACKAGE_ARCH}-openwrt-${OPENWRT_PACKAGE_SERIES}.tar.gz"
-          nikki_archive="nikki_${IB_PACKAGE_ARCH}-openwrt-${OPENWRT_PACKAGE_SERIES}.tar.gz"
-          download_asset sbwml/luci-app-mosdns "${mosdns_archive}" /tmp/mosdns 120
-          download_asset nikkinikki-org/OpenWrt-nikki "${nikki_archive}" /tmp/nikki 120
-          download_asset kenzok8/openwrt-daede "luci-app-daede-*-${IB_PACKAGE_ARCH}.apk" packages-daed 60
-          download_asset kenzok8/openwrt-daede "daed-*-${IB_PACKAGE_ARCH}.apk" packages-daed 120
-          download_asset kenzok8/openwrt-daede "vmlinux-btf-*-${IB_PACKAGE_ARCH}.apk" packages-daed 120
-          arch_suffix="-${IB_PACKAGE_ARCH}.apk"
-          for package in packages-daed/*-"${IB_PACKAGE_ARCH}".apk; do
-            mv "${package}" "${package%"${arch_suffix}"}.apk"
-          done
-          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
-            --archive "/tmp/mosdns/${mosdns_archive}" \
-            --target /tmp/mosdns/extract
-          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" safe-extract-tar \
-            --archive "/tmp/nikki/${nikki_archive}" \
-            --target /tmp/nikki/extract
-          find /tmp/mosdns/extract -type f -name '*.apk' ! -name 'v2ray-*.apk' \
-            -print -exec mv -f {} packages/ \;
-          find /tmp/nikki/extract -type f -name '*.apk' -print -exec mv -f {} packages/ \;
-
-      - name: Collect signed official APK metadata
-        run: |
+          mkdir -p dist/metadata
           python3 scripts/openwrt_build_preflight.py collect-apk-package-index \
             --apk-bin imagebuilder/staging_dir/host/bin/apk \
             --repositories imagebuilder/repositories \
             --keys-dir imagebuilder/keys \
-            --architecture "${IB_PACKAGE_ARCH}" \
+            --architecture i386_pentium4 \
             --package-index dist/metadata/package-index.json \
             --provenance dist/metadata/upstream-provenance.json
-
-      - name: Resolve exact source references
-        run: |
           python3 scripts/openwrt_build_preflight.py resolve-source-refs \
             --components config/third-party-components.json \
-            --provenance dist/metadata/upstream-provenance.json \
             --feeds-buildinfo-url "${IB_BASE_URL}/feeds.buildinfo" \
             --immortalwrt-commit "${IMMORTALWRT_COMMIT}" \
             --out dist/metadata/source-refs.json \
             --retries 5 \
             --timeout 30
 
-      - name: Build images and package manifests
+      - name: Build official generic image
         run: |
+          mkdir -p build-out
           cd imagebuilder
-          build_flavor() {
-            flavor="$1"
-            package_file="$2"
-            output_name="$3"
-            manifest_name="$4"
-
-            if [ "${flavor}" = "daed" ]; then
-              cp packages-daed/*.apk packages/
-              rm -f packages/packages.adb
-            fi
-
-            packages="$(python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" package-string --package-file "${package_file}")"
-            make manifest PROFILE="generic" PACKAGES="${packages}" | tee "/tmp/${manifest_name}.log"
-            awk '/^[A-Za-z0-9_.+:-]+ - / {print}' "/tmp/${manifest_name}.log" \
-              > "${GITHUB_WORKSPACE}/build-out/${manifest_name}"
-            test -s "${GITHUB_WORKSPACE}/build-out/${manifest_name}"
-            python3 "${GITHUB_WORKSPACE}/scripts/generate_firmware_identity.py" \
-              --flavor "${flavor}" \
-              --target "${IB_TARGET}" \
-              --builder-commit "${GITHUB_SHA}" \
-              --imagebuilder-version "${IB_VERSION}" \
-              --imagebuilder-sha256 "${IB_ARCHIVE_SHA256}" \
-              --immortalwrt-version-code "${IMMORTALWRT_VERSION_CODE}" \
-              --immortalwrt-commit "${IMMORTALWRT_COMMIT}" \
-              --package-manifest "${GITHUB_WORKSPACE}/build-out/${manifest_name}" \
-              --provenance "${GITHUB_WORKSPACE}/dist/metadata/upstream-provenance.json" \
-              --source-refs "${GITHUB_WORKSPACE}/dist/metadata/source-refs.json" \
-              --output "${GITHUB_WORKSPACE}/build-out/${flavor}.identity.json"
-            cp "${GITHUB_WORKSPACE}/build-out/${flavor}.identity.json" \
-              "${GITHUB_WORKSPACE}/files/etc/immortalwrt-builder-release.json"
-            rm -rf "bin/targets/${IB_TARGET}"
-            make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="${packages}"
-
-            shopt -s nullglob
-            images=(bin/targets/"${IB_TARGET}"/*squashfs-combined-efi.img.gz)
-            if [ "${#images[@]}" -ne 1 ]; then
-              echo "Expected exactly one ${flavor} squashfs EFI image, found ${#images[@]}" >&2
-              exit 1
-            fi
-            cp "${images[0]}" "${GITHUB_WORKSPACE}/build-out/${output_name}"
-          }
-
-          mkdir -p "${GITHUB_WORKSPACE}/build-out"
-          build_flavor standard "${GITHUB_WORKSPACE}/config/openwrt-packages.txt" \
-            immortalwrt-x86-64.img.gz standard.packages.manifest
-          build_flavor daed "${GITHUB_WORKSPACE}/config/openwrt-packages-daed.txt" \
-            immortalwrt-x86-64-daed.img.gz daed.packages.manifest
+          make manifest PROFILE="generic" | tee /tmp/base.packages.manifest.log
+          awk '/^[A-Za-z0-9_.+:-]+ - / {print}' /tmp/base.packages.manifest.log \
+            > "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"
+          test -s "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"
+          forbidden_packages='^(daed|luci-app-daede|luci-app-mosdns|mosdns|luci-app-passwall2|luci-app-openclash|luci-app-nikki|luci-i18n-nikki-zh-cn|nikki|mihomo-meta|v2ray-geoip|v2ray-geosite) - '
+          if grep -Eq "${forbidden_packages}" "${GITHUB_WORKSPACE}/build-out/base.packages.manifest"; then
+            echo "Official base manifest unexpectedly contains a removed proxy or DNS package:" >&2
+            grep -E "${forbidden_packages}" "${GITHUB_WORKSPACE}/build-out/base.packages.manifest" >&2
+            exit 1
+          fi
+          make image PROFILE="generic"
+          images=(bin/targets/"${IB_TARGET}"/*squashfs-combined-efi.img.gz)
+          if [ "${#images[@]}" -ne 1 ]; then
+            echo "Expected exactly one squashfs EFI image, found ${#images[@]}" >&2
+            exit 1
+          fi
+          cp "${images[0]}" "${GITHUB_WORKSPACE}/build-out/immortalwrt-x86-generic.img.gz"
 
       - name: Convert and assemble release bundle
         id: convert
@@ -250,8 +137,7 @@ jobs:
             --source-dir build-out \
             --out-dir dist
           python3 scripts/generate_release_metadata.py \
-            --standard-manifest build-out/standard.packages.manifest \
-            --daed-manifest build-out/daed.packages.manifest \
+            --manifest build-out/base.packages.manifest \
             --components config/third-party-components.json \
             --package-index dist/metadata/package-index.json \
             --provenance dist/metadata/upstream-provenance.json \
@@ -263,9 +149,7 @@ jobs:
             --immortalwrt-version-code "${IMMORTALWRT_VERSION_CODE}" \
             --immortalwrt-commit "${IMMORTALWRT_COMMIT}" \
             --build-date "${BUILD_DATE}" \
-            --repository "${GITHUB_REPOSITORY}" \
-            --standard-identity build-out/standard.identity.json \
-            --daed-identity build-out/daed.identity.json
+            --repository "${GITHUB_REPOSITORY}"
           count="$(python3 -c 'import json; print(len(json.load(open("dist/build-results.json"))["built"]))')"
           echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
@@ -308,7 +192,7 @@ jobs:
             dist/*.img.gz
             dist/*.ova
 
-      - name: Publish releases
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

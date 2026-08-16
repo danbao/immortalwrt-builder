@@ -13,7 +13,7 @@ import publish_releases
 
 class PublishReleasesTests(unittest.TestCase):
     def test_existing_release_full_sha_rejects_short_hash_collision(self) -> None:
-        tag = "openwrt-immortalwrt-x86-64-20260726-cf123-aaaaaaaaaaaa"
+        tag = "openwrt-immortalwrt-x86-generic-20260726-cf123-aaaaaaaaaaaa"
         metadata_payload = {
             "results": {
                 "built": [
@@ -39,33 +39,34 @@ class PublishReleasesTests(unittest.TestCase):
                 "a" * 12 + "b" * 52,
             )
 
-    def test_managed_release_family_recognizes_standard_and_daed_tags(self) -> None:
+    def test_managed_release_family_recognizes_only_base_tags(self) -> None:
         self.assertEqual(
-            publish_releases.managed_release_family("openwrt-immortalwrt-x86-64-20260713-cf234f8de6d5-123abc456def"),
-            "standard",
+            publish_releases.managed_release_family("openwrt-immortalwrt-x86-generic-20260713-cf234f8de6d5-123abc456def"),
+            "base",
         )
-        self.assertEqual(
-            publish_releases.managed_release_family("openwrt-immortalwrt-x86-64-daed-20260713-cf234f8de6d5-123abc456def"),
-            "daed",
+        self.assertIsNone(
+            publish_releases.managed_release_family(
+                "openwrt-immortalwrt-x86-64-20260713-cf234f8de6d5-123abc456def"
+            )
         )
         self.assertIsNone(publish_releases.managed_release_family("manual-release"))
 
     def test_managed_release_image_key_uses_family_and_image_sha(self) -> None:
         self.assertEqual(
             publish_releases.managed_release_image_key(
-                "openwrt-immortalwrt-x86-64-daed-20260713-cf234f8de6d5-123abc456def"
+                "openwrt-immortalwrt-x86-generic-20260713-cf234f8de6d5-123abc456def"
             ),
-            ("daed", "123abc456def"),
+            ("base", "123abc456def"),
         )
         self.assertIsNone(publish_releases.managed_release_image_key("manual-release"))
 
     def test_expected_asset_paths_includes_release_metadata(self) -> None:
         item = {
-            "release_tag": "openwrt-immortalwrt-x86-64-20260710-cf234f8de6d5-aaaaaaaaaaaa",
+            "release_tag": "openwrt-immortalwrt-x86-generic-20260710-cf234f8de6d5-aaaaaaaaaaaa",
             "ova_path": "dist/demo.ova",
             "checksum_path": "dist/demo.ova.sha256",
-            "image_path": "build-out/immortalwrt-x86-64.img.gz",
-            "image_asset": "immortalwrt-x86-64-20260710.img.gz",
+            "image_path": "build-out/immortalwrt-x86-generic.img.gz",
+            "image_asset": "immortalwrt-x86-generic-20260710.img.gz",
         }
         paths = publish_releases.expected_asset_paths(item, Path("dist/metadata"))
         self.assertEqual(
@@ -73,12 +74,12 @@ class PublishReleasesTests(unittest.TestCase):
             [
                 Path("dist/demo.ova"),
                 Path("dist/demo.ova.sha256"),
-                Path("dist/immortalwrt-x86-64-20260710.img.gz"),
-                Path("dist/immortalwrt-x86-64-20260710.img.gz.sha256"),
-                Path("dist/metadata/standard/build-metadata.json"),
-                Path("dist/metadata/standard/packages.spdx.json"),
-                Path("dist/metadata/standard/upstream-provenance.json"),
-                Path("dist/metadata/standard/third-party-sources.json"),
+                Path("dist/immortalwrt-x86-generic-20260710.img.gz"),
+                Path("dist/immortalwrt-x86-generic-20260710.img.gz.sha256"),
+                Path("dist/metadata/base/build-metadata.json"),
+                Path("dist/metadata/base/packages.spdx.json"),
+                Path("dist/metadata/base/upstream-provenance.json"),
+                Path("dist/metadata/base/source-inventory.json"),
             ],
         )
 
@@ -105,22 +106,21 @@ class PublishReleasesTests(unittest.TestCase):
             "ova_path": "dist/demo.ova",
             "checksum_path": "dist/demo.ova.sha256",
             "image_path": "build-out/demo.img.gz",
-            "image_asset": "immortalwrt-x86-64-demo.img.gz",
+            "image_asset": "immortalwrt-x86-generic-demo.img.gz",
         }
         with self.assertRaisesRegex(ValueError, "unmanaged release tag"):
             publish_releases.validate_publish_item(item, Path("dist/metadata"))
 
-        item["release_tag"] = "openwrt-immortalwrt-x86-64-20260713-cf234f8de6d5-aaaaaaaaaaaa"
+        item["release_tag"] = "openwrt-immortalwrt-x86-generic-20260713-cf234f8de6d5-aaaaaaaaaaaa"
         item["ova_path"] = "../outside.ova"
         with self.assertRaisesRegex(ValueError, "outside dist"):
             publish_releases.validate_publish_item(item, Path("dist/metadata"))
 
-    def test_prune_old_releases_keeps_each_family_separately(self) -> None:
+    def test_prune_old_releases_keeps_latest_base_release(self) -> None:
         releases = [
-            {"tagName": "openwrt-immortalwrt-x86-64-20260713-cf-aaa111aaa111", "createdAt": "2026-07-13T00:00:00Z"},
-            {"tagName": "openwrt-immortalwrt-x86-64-20260712-cf-bbb222bbb222", "createdAt": "2026-07-12T00:00:00Z"},
-            {"tagName": "openwrt-immortalwrt-x86-64-daed-20260713-cf-ccc333ccc333", "createdAt": "2026-07-13T00:00:00Z"},
-            {"tagName": "openwrt-immortalwrt-x86-64-daed-20260712-cf-ddd444ddd444", "createdAt": "2026-07-12T00:00:00Z"},
+            {"tagName": "openwrt-immortalwrt-x86-generic-20260713-cf-aaa111aaa111", "createdAt": "2026-07-13T00:00:00Z"},
+            {"tagName": "openwrt-immortalwrt-x86-generic-20260712-cf-bbb222bbb222", "createdAt": "2026-07-12T00:00:00Z"},
+            {"tagName": "manual-release", "createdAt": "2026-07-13T00:00:00Z"},
         ]
         deleted: list[str] = []
 
@@ -134,8 +134,7 @@ class PublishReleasesTests(unittest.TestCase):
         self.assertEqual(
             deleted,
             [
-                "openwrt-immortalwrt-x86-64-daed-20260712-cf-ddd444ddd444",
-                "openwrt-immortalwrt-x86-64-20260712-cf-bbb222bbb222",
+                "openwrt-immortalwrt-x86-generic-20260712-cf-bbb222bbb222",
             ],
         )
 

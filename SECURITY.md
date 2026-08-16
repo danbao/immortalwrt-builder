@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest source on `main` and the latest managed Release for each flavor receive security fixes. Older firmware should be treated as unsupported.
+Only the latest source on `main` and the latest managed Release receive security fixes. Older firmware should be treated as unsupported.
 
 ## Reporting a vulnerability
 
