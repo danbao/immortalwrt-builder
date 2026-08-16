@@ -55,6 +55,7 @@ jobs:
             --github-env "${GITHUB_ENV}" \
             --retries 8 \
             --timeout 30
+          # shellcheck disable=SC1090
           source "${GITHUB_ENV}"
           python3 scripts/openwrt_build_preflight.py download-url \
             --url "${IB_BASE_URL}/${IB_ARCHIVE}" \
@@ -67,17 +68,19 @@ jobs:
 
       - name: Collect upstream metadata
         run: |
-          source "${GITHUB_ENV}"
           version_code="$(curl -fsSL --retry 8 --retry-delay 5 --connect-timeout 30 "${IB_BASE_URL}/version.buildinfo" | tr -d '[:space:]')"
           immortalwrt_commit="${version_code##*-}"
           if [ -z "${version_code}" ] || [ "${immortalwrt_commit}" = "${version_code}" ]; then
             echo "Failed to parse ImmortalWrt version.buildinfo: ${version_code}" >&2
             exit 1
           fi
+          BUILD_DATE="$(TZ=Asia/Shanghai date +%Y%m%d)"
+          IMMORTALWRT_VERSION_CODE="${version_code}"
+          IMMORTALWRT_COMMIT="${immortalwrt_commit}"
           {
-            echo "BUILD_DATE=$(TZ=Asia/Shanghai date +%Y%m%d)"
-            echo "IMMORTALWRT_VERSION_CODE=${version_code}"
-            echo "IMMORTALWRT_COMMIT=${immortalwrt_commit}"
+            echo "BUILD_DATE=${BUILD_DATE}"
+            echo "IMMORTALWRT_VERSION_CODE=${IMMORTALWRT_VERSION_CODE}"
+            echo "IMMORTALWRT_COMMIT=${IMMORTALWRT_COMMIT}"
           } >> "${GITHUB_ENV}"
           mkdir -p dist/metadata
           python3 scripts/openwrt_build_preflight.py collect-apk-package-index \
