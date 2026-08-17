@@ -2,7 +2,7 @@
 
 Keep changes focused. Do not commit firmware images, build directories, credentials, subscriptions, VPN configuration, private addresses, or generated Release metadata.
 
-The firmware must remain an unmodified ImmortalWrt 25.12.1 `x86/generic` ImageBuilder `generic` profile build. Do not add custom packages, third-party package downloads, or a `FILES` overlay without an explicit project decision.
+The firmware must remain an ImmortalWrt 25.12.1 `x86/generic` ImageBuilder `generic` profile build with only `luci-app-vlmcsd` added through `PACKAGES`. Do not add other custom packages, third-party package downloads, or a `FILES` overlay without an explicit project decision.
 
 Before opening a pull request, run:
 

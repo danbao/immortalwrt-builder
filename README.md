@@ -4,10 +4,10 @@
 
 ## 构建原则
 
-- 固件使用官方 `generic` profile 的默认软件包集合。
-- 不传入自定义 `PACKAGES`，不注入 `FILES` 覆盖。
+- 固件使用官方 `generic` profile，并仅额外预装官方源中的 `luci-app-vlmcsd`。
+- `PACKAGES` 只允许包含 `luci-app-vlmcsd`，不注入 `FILES` 覆盖。
 - 不包含第三方代理、DNS 插件或本仓库的旁路由运行时配置。
-- 不下载或安装第三方代理、DNS、LuCI 插件。
+- 不下载或安装第三方代理、DNS 插件。
 - ImageBuilder 下载必须通过官方 `sha256sums` 校验。
 
 官方发布目录：<https://downloads.immortalwrt.org/releases/25.12.1/targets/x86/generic/>
@@ -19,8 +19,8 @@ GitHub Actions 每天北京时间 02:00 执行构建，也可以手动运行。�
 每次构建执行以下流程：
 
 1. 获取并校验 ImmortalWrt 25.12.1 `x86/generic` ImageBuilder。
-2. 使用 `make manifest PROFILE="generic"` 记录官方默认软件包。
-3. 使用 `make image PROFILE="generic"` 构建固件。
+2. 使用 `make manifest PROFILE="generic" PACKAGES="luci-app-vlmcsd"` 记录最终软件包。
+3. 使用 `make image PROFILE="generic" PACKAGES="luci-app-vlmcsd"` 构建固件。
 4. 复制 raw 镜像并转换为单网卡 VMXNET3 ESXi OVA。
 5. 生成构建元数据、上游来源记录和 SPDX 软件包清单。
 6. 对发布产物生成 GitHub artifact attestation。

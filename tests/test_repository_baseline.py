@@ -7,15 +7,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RepositoryBaselineTests(unittest.TestCase):
-    def test_firmware_build_has_no_package_or_file_overrides(self) -> None:
+    def test_firmware_build_only_adds_vlmcsd_without_file_overrides(self) -> None:
         workflow = (ROOT / ".github/workflows/build-openwrt.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn('IB_TARGET: x86/generic', workflow)
-        self.assertIn('make manifest PROFILE="generic"', workflow)
-        self.assertIn('make image PROFILE="generic"', workflow)
+        package_lines = [
+            line.strip()
+            for line in workflow.splitlines()
+            if line.strip().startswith("BASE_PACKAGES:")
+        ]
+        self.assertEqual(package_lines, ["BASE_PACKAGES: luci-app-vlmcsd"])
+        package_arguments = [
+            line.strip()
+            for line in workflow.splitlines()
+            if "PACKAGES=" in line
+        ]
+        self.assertEqual(
+            package_arguments,
+            [
+                'make manifest PROFILE="generic" PACKAGES="${BASE_PACKAGES}" '
+                "| tee /tmp/base.packages.manifest.log",
+                'make image PROFILE="generic" PACKAGES="${BASE_PACKAGES}"',
+            ],
+        )
         self.assertIn("--architecture i386_pentium4", workflow)
-        self.assertNotIn("PACKAGES=", workflow)
+        self.assertIn("grep -Eq '^luci-app-vlmcsd - '", workflow)
+        self.assertIn("grep -Eq '^vlmcsd - '", workflow)
         self.assertNotIn("FILES=", workflow)
         self.assertNotIn("download-release-asset", workflow)
         self.assertIn("forbidden_packages=", workflow)
