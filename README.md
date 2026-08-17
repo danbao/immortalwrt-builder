@@ -49,6 +49,13 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每天运行一次。默认 ImageBuilder 版本为 `25.12.1`。手动触发时可以通过 `ib_version` 临时指定版本，并用 `publish_release=false` 做不发布 Release 的实验构建。
 
+### Runner 选择
+
+手动触发时可以选择 `runner`：
+
+- `ubuntu-latest`（默认）：GitHub 托管 runner，计划任务固定使用它。
+- `self-hosted`：使用你自己的 runner，label 必须包含 `self-hosted`。自托管 runner 需要满足：Linux + 免密 `sudo`（用于 `apt-get` 安装 qemu-utils/zstd 等依赖）、`qemu-img`、以及发布/记录步骤所需的 `gh` CLI（仅 `publish_release=true` 时需要）。自托管 runner 的工作目录会跨 run 保留，工作流开头会先清理上一次的 `imagebuilder/`、`build-out/`、`dist/`。
+
 工作流执行顺序：
 
 1. 安装 Ubuntu runner 依赖，包括 ImageBuilder 所需工具和 `qemu-utils`。

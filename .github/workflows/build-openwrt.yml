@@ -3,6 +3,14 @@ name: Build OpenWrt
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        description: Runner label; use self-hosted to build on your own runner (label must include "self-hosted")
+        required: true
+        default: "ubuntu-latest"
+        type: choice
+        options:
+          - "ubuntu-latest"
+          - "self-hosted"
       ib_version:
         description: ImmortalWrt ImageBuilder version; default 25.12.1, override only with publish_release=false for dry-run validation
         required: true
@@ -33,12 +41,18 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Scheduled runs always use the GitHub-hosted runner; manual dispatch can pick "self-hosted".
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Clean workspace from previous runs
+        run: |
+          rm -rf imagebuilder build-out dist "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
+          mkdir -p build-out dist
 
       - name: Install dependencies
         run: |
