@@ -2,7 +2,7 @@
 
 这个仓库用于自动构建面向虚拟化环境的 ImmortalWrt x86_64 固件，并把 ImageBuilder 生成的原始镜像转换成可直接导入 ESXi 的 OVA。构建产物通过 GitHub Releases 发布，仓库本身只保存脚本、工作流和轻量级转换记录，不保存大型镜像文件。
 
-当前流程以 ImmortalWrt 25.12.1 官方 ImageBuilder 为基础，不从源码完整编译固件。每天构建一个 flavor：官方基础镜像 + daed（eBPF 透明代理一体包）。除 daed 外不内置任何第三方代理或 DNS 插件。
+当前流程以 ImmortalWrt 25.12.1 官方 ImageBuilder 为基础，不从源码完整编译固件。每次构建产出单一 flavor：官方基础镜像 + daed（eBPF 透明代理一体包）。除 daed 外不内置任何第三方代理或 DNS 插件。
 
 ## 产物说明
 
@@ -47,7 +47,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 ## 自动构建流程
 
-主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每天运行一次。默认 ImageBuilder 版本为 `25.12.1`。手动触发时可以通过 `ib_version` 临时指定版本，并用 `publish_release=false` 做不发布 Release 的实验构建。
+主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每周一 02:00（Asia/Shanghai）运行，且仅在偶数 ISO 周实际构建（双周构建）。默认 ImageBuilder 版本为 `25.12.1`。手动触发时可以通过 `ib_version` 临时指定版本，并用 `publish_release=false` 做不发布 Release 的实验构建。
 
 ### Runner 选择
 
@@ -68,7 +68,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 8. 调用 `scripts/openwrt_build_preflight.py copy-raw-images` 按 `build-results.json` 复制 raw image，再调用 `scripts/publish_releases.py` 创建 GitHub Release，并校验 `.ova`、`.ova.sha256`、`.img.gz` 三类资产都已上传。
 9. 调用 `record` 更新 `manifests/converted-images.json` 和 `docs/converted-images.md`，再校验本次所有 Release tag 和 latest Release 已被记录，最后由 workflow 提交记录。
 
-转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。每日 workflow 只代表每天检查和构建，镜像 SHA 未变化时不会发布新 Release。Release 清理按 daed family 保留最近 30 个；历史 standard family 也继续按最近 30 个修剪。
+转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。定时 workflow 只代表定期检查和构建，镜像 SHA 未变化时不会发布新 Release。Release 清理按 daed family 保留最近 30 个；历史 standard family 也继续按最近 30 个修剪。
 
 ## 内置组件与运行注意事项
 

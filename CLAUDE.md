@@ -50,7 +50,7 @@ ruby -e 'require "yaml"; YAML.load_file(".github/workflows/build-openwrt.yml"); 
 
 ### Build + release pipeline (`.github/workflows/build-openwrt.yml`)
 
-One job, triggered by `workflow_dispatch` or a daily schedule. Steps in order:
+One job, triggered by `workflow_dispatch` or a weekly schedule (Monday 02:00 Asia/Shanghai, gated by a `schedule` job that only allows builds on even ISO weeks). Steps in order:
 
 1. **ImageBuilder assembly** — defaults to `IB_VERSION=25.12.1`, `IB_TARGET=x86/64` (APK-based); manual dispatch can override `ib_version`, pick the `runner` (`ubuntu-latest` or `self-hosted`; scheduled runs always use `ubuntu-latest`), and set `publish_release=false` for dry-run experiments. A cleanup step removes `imagebuilder/`, `build-out/`, `dist/`, and the IB archive first because self-hosted workspaces persist between runs. The workflow resolves the upstream `sha256sums` entry before downloading the ImageBuilder. Auxiliary image formats (ISO/qcow2/VDI/VMDK/VHDX) are sed-disabled in the IB `.config` because each needs extra host tools (xorriso, qemu-img) and nothing downstream consumes them.
 2. **Release metadata** — reads upstream `version.buildinfo` for values like `r33869-cf234f8de6d5`, extracts the ImmortalWrt commit, and combines it with the Asia/Shanghai build date for release tags and asset names like `openwrt-immortalwrt-x86-64-daed-20260616-cf234f8de6d5-<image_sha12>` and `immortalwrt-x86-64-daed-esxi-20260616-cf234f8de6d5-<image_sha12>.ova`.
