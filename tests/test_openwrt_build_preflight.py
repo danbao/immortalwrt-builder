@@ -1,8 +1,10 @@
 import argparse
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import sys
 
@@ -12,53 +14,188 @@ import openwrt_build_preflight as preflight
 
 
 class OpenWrtBuildPreflightTests(unittest.TestCase):
-    def test_daed_package_list_excludes_conflicting_proxy_stacks(self) -> None:
-        package_file = Path(__file__).resolve().parents[1] / "config" / "openwrt-packages-daed.txt"
-        packages = set(preflight.read_packages(package_file))
-        self.assertIn("luci-app-daede", packages)
+    def test_daed_feed_config_excludes_conflicting_proxy_stacks(self) -> None:
+        config_file = Path(__file__).resolve().parents[1] / "config" / "daed-feed.json"
+        config = preflight.load_daed_config(config_file)
+        self.assertEqual(config["sdk"], "25.12")
+        self.assertEqual(config["arch"], "x86_64")
+        packages = set(config["packages"])
         self.assertIn("daed", packages)
-        self.assertIn("luci-app-mosdns", packages)
+        self.assertIn("luci-app-daede", packages)
         self.assertNotIn("luci-app-passwall2", packages)
         self.assertNotIn("luci-app-openclash", packages)
         self.assertNotIn("luci-app-nikki", packages)
-        self.assertNotIn("luci-i18n-nikki-zh-cn", packages)
-        self.assertNotIn("mihomo-meta", packages)
+        self.assertNotIn("luci-app-mosdns", packages)
 
-    def test_read_packages_ignores_comments_and_rejects_duplicates(self) -> None:
+    def test_load_daed_config_rejects_missing_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
-            package_file = Path(tmp_s) / "packages.txt"
-            package_file.write_text(
-                """
-                # base UI
-                luci luci-base
-                curl # inline comment
-                """,
+            config_file = Path(tmp_s) / "daed-feed.json"
+            config_file.write_text(json.dumps({"base_url": "https://feed.test/daed"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "missing required key"):
+                preflight.load_daed_config(config_file)
+
+            config_file.write_text(
+                json.dumps(
+                    {
+                        "base_url": "https://feed.test/daed",
+                        "sdk": "25.12",
+                        "arch": "x86_64",
+                        "packages": [],
+                    }
+                ),
                 encoding="utf-8",
             )
-            self.assertEqual(preflight.read_packages(package_file), ["luci", "luci-base", "curl"])
+            with self.assertRaisesRegex(ValueError, "non-empty list"):
+                preflight.load_daed_config(config_file)
 
-            package_file.write_text("luci\nluci\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "duplicate package"):
-                preflight.read_packages(package_file)
+    def test_parse_daed_manifest(self) -> None:
+        payload = (
+            "daed=daed-2026.08.13-r2.apk\n"
+            "daed_sha256=5bd132fcf498d55d990a7f28af572c94facbef1b0299b995a38992e92de15e06\n"
+            "luci-app-daede=luci-app-daede-1.14.7-r23.apk\n"
+            "luci-app-daede_sha256=b25b8f3107cb618729996b0665950406839d88d02f14ff38b2fb9d50b1244639\n"
+        )
+        manifest = preflight.parse_daed_manifest(payload)
+        self.assertEqual(manifest["daed"]["filename"], "daed-2026.08.13-r2.apk")
+        self.assertEqual(
+            manifest["daed"]["sha256"],
+            "5bd132fcf498d55d990a7f28af572c94facbef1b0299b995a38992e92de15e06",
+        )
+        self.assertEqual(manifest["luci-app-daede"]["filename"], "luci-app-daede-1.14.7-r23.apk")
 
-    def test_read_feeds_parses_required_flag(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing a filename"):
+            preflight.parse_daed_manifest("daed_sha256=" + "a" * 64 + "\n")
+        with self.assertRaisesRegex(ValueError, "invalid daed manifest line"):
+            preflight.parse_daed_manifest("garbage line without equals\n")
+
+    def test_extract_package_version(self) -> None:
+        self.assertEqual(preflight.extract_package_version("daed-2026.08.13-r2.apk", "daed"), "2026.08.13-r2")
+        self.assertEqual(
+            preflight.extract_package_version("luci-app-daede-1.14.7-r23.apk", "luci-app-daede"),
+            "1.14.7-r23",
+        )
+        with self.assertRaisesRegex(ValueError, "does not match package"):
+            preflight.extract_package_version("other-1.0.apk", "daed")
+
+    def test_cmd_daed_packages_downloads_and_records(self) -> None:
+        daed_body = b"daed-apk-body"
+        luci_body = b"luci-apk-body"
+        manifest_payload = (
+            f"daed=daed-2026.08.13-r2.apk\n"
+            f"daed_sha256={hashlib.sha256(daed_body).hexdigest()}\n"
+            "luci-app-daede=luci-app-daede-1.14.7-r23.apk\n"
+            f"luci-app-daede_sha256={hashlib.sha256(luci_body).hexdigest()}\n"
+        )
+
+        def fake_fetch(url: str, **kwargs: object) -> bytes:
+            if url.endswith("manifest-daede.txt"):
+                return manifest_payload.encode("utf-8")
+            raise AssertionError(f"unexpected fetch: {url}")
+
+        def fake_download(url: str, output: Path, **kwargs: object) -> None:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(daed_body if "/daed-" in url else luci_body)
+
         with tempfile.TemporaryDirectory() as tmp_s:
-            feed_file = Path(tmp_s) / "feeds.tsv"
-            feed_file.write_text(
-                "# name\turl\trequired\nnikki\thttps://example.test/feed/\ttrue\noptional\thttps://example.test/optional\tfalse\n",
+            tmp = Path(tmp_s)
+            config_file = tmp / "daed-feed.json"
+            config_file.write_text(
+                json.dumps(
+                    {
+                        "base_url": "https://feed.test/daed",
+                        "sdk": "25.12",
+                        "arch": "x86_64",
+                        "packages": ["daed", "luci-app-daede"],
+                    }
+                ),
                 encoding="utf-8",
             )
-            feeds = preflight.read_feeds(feed_file)
-            self.assertEqual(feeds[0], preflight.Feed("nikki", "https://example.test/feed", True))
-            self.assertEqual(feeds[1], preflight.Feed("optional", "https://example.test/optional", False))
+            args = argparse.Namespace(
+                config=config_file,
+                out_dir=tmp / "packages",
+                metadata_out=tmp / "daed-packages.json",
+                timeout=1,
+                retries=1,
+            )
+            with mock.patch.object(preflight, "fetch_bytes", side_effect=fake_fetch), mock.patch.object(
+                preflight, "download_url", side_effect=fake_download
+            ):
+                self.assertEqual(preflight.cmd_daed_packages(args), 0)
 
-    def test_select_release_asset_requires_exactly_one_match(self) -> None:
-        assets = [{"name": "luci-app-demo_1_all.ipk"}, {"name": "demo.tar.gz"}]
-        self.assertEqual(preflight.select_release_asset(assets, "luci-app-demo_*_all.ipk")["name"], "luci-app-demo_1_all.ipk")
-        with self.assertRaisesRegex(ValueError, "found 0"):
-            preflight.select_release_asset(assets, "missing*")
-        with self.assertRaisesRegex(ValueError, "found 2"):
-            preflight.select_release_asset(assets, "*")
+            meta = json.loads((tmp / "daed-packages.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["packages"]["daed"]["version"], "2026.08.13-r2")
+            self.assertEqual(meta["packages"]["daed"]["sha256"], hashlib.sha256(daed_body).hexdigest())
+            self.assertEqual(meta["packages"]["luci-app-daede"]["version"], "1.14.7-r23")
+            self.assertEqual((tmp / "packages" / "daed-2026.08.13-r2.apk").read_bytes(), daed_body)
+
+    def test_cmd_daed_packages_rejects_sha_mismatch(self) -> None:
+        manifest_payload = (
+            "daed=daed-2026.08.13-r2.apk\n"
+            "daed_sha256=" + "a" * 64 + "\n"
+        )
+
+        def fake_fetch(url: str, **kwargs: object) -> bytes:
+            return manifest_payload.encode("utf-8")
+
+        def fake_download(url: str, output: Path, **kwargs: object) -> None:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"tampered body")
+
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            config_file = tmp / "daed-feed.json"
+            config_file.write_text(
+                json.dumps(
+                    {
+                        "base_url": "https://feed.test/daed",
+                        "sdk": "25.12",
+                        "arch": "x86_64",
+                        "packages": ["daed"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=config_file,
+                out_dir=tmp / "packages",
+                metadata_out=tmp / "daed-packages.json",
+                timeout=1,
+                retries=1,
+            )
+            with mock.patch.object(preflight, "fetch_bytes", side_effect=fake_fetch), mock.patch.object(
+                preflight, "download_url", side_effect=fake_download
+            ):
+                with self.assertRaisesRegex(ValueError, "sha256 mismatch"):
+                    preflight.cmd_daed_packages(args)
+
+    def test_cmd_daed_packages_requires_manifest_entry(self) -> None:
+        def fake_fetch(url: str, **kwargs: object) -> bytes:
+            return b"other=other-1.0.apk\nother_sha256=" + b"a" * 64 + b"\n"
+
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            config_file = tmp / "daed-feed.json"
+            config_file.write_text(
+                json.dumps(
+                    {
+                        "base_url": "https://feed.test/daed",
+                        "sdk": "25.12",
+                        "arch": "x86_64",
+                        "packages": ["daed"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=config_file,
+                out_dir=tmp / "packages",
+                metadata_out=tmp / "daed-packages.json",
+                timeout=1,
+                retries=1,
+            )
+            with mock.patch.object(preflight, "fetch_bytes", side_effect=fake_fetch):
+                with self.assertRaisesRegex(ValueError, "no entry for required package"):
+                    preflight.cmd_daed_packages(args)
 
     def test_parse_sha256sums_requires_one_archive_entry(self) -> None:
         payload = "abc123  immortalwrt-imagebuilder-24.10.6-x86-64.Linux-x86_64.tar.zst\n"

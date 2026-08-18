@@ -4,79 +4,65 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 
 
 DEFAULT_USER_AGENT = "danbao-openwrt-builder"
+MAX_METADATA_BYTES = 4 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 
 
-@dataclass(frozen=True)
-class Feed:
-    name: str
-    url: str
-    required: bool
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def strip_comment(line: str) -> str:
-    return line.split("#", 1)[0].strip()
+def load_daed_config(path: Path) -> dict:
+    config = json.loads(path.read_text(encoding="utf-8"))
+    for key in ("base_url", "sdk", "arch"):
+        if not config.get(key):
+            raise ValueError(f"daed feed config is missing required key: {key}")
+    if not isinstance(config.get("packages"), list) or not config["packages"]:
+        raise ValueError("daed feed config packages must be a non-empty list")
+    config["base_url"] = str(config["base_url"]).rstrip("/")
+    return config
 
 
-def read_packages(path: Path) -> list[str]:
-    packages: list[str] = []
-    seen: set[str] = set()
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        clean = strip_comment(line)
-        if not clean:
+def parse_daed_manifest(payload: str) -> dict[str, dict[str, str]]:
+    entries: dict[str, dict[str, str]] = {}
+    for lineno, line in enumerate(payload.splitlines(), start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
             continue
-        for package in clean.split():
-            if package in seen:
-                raise ValueError(f"duplicate package in {path}:{lineno}: {package}")
-            seen.add(package)
-            packages.append(package)
-    if not packages:
-        raise ValueError(f"package list is empty: {path}")
-    return packages
+        name, _, value = line.partition("=")
+        name = name.strip()
+        value = value.strip()
+        if not name or not value:
+            raise ValueError(f"invalid daed manifest line {lineno}: {line!r}")
+        if name.endswith("_sha256"):
+            entries.setdefault(name[: -len("_sha256")], {})["sha256"] = value
+        else:
+            entries.setdefault(name, {})["filename"] = value
+    for package, fields in entries.items():
+        if not fields.get("filename"):
+            raise ValueError(f"daed manifest is missing a filename entry for {package}")
+    return entries
 
 
-def parse_bool(value: str) -> bool:
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "required"}:
-        return True
-    if normalized in {"0", "false", "no", "optional"}:
-        return False
-    raise ValueError(f"invalid boolean value: {value}")
-
-
-def read_feeds(path: Path) -> list[Feed]:
-    feeds: list[Feed] = []
-    seen: set[str] = set()
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        clean = strip_comment(line)
-        if not clean:
-            continue
-        parts = clean.split("\t")
-        if len(parts) != 3:
-            raise ValueError(f"expected 3 tab-separated fields in {path}:{lineno}")
-        name, url, required = (part.strip() for part in parts)
-        if not name or not url:
-            raise ValueError(f"feed name/url cannot be empty in {path}:{lineno}")
-        if name in seen:
-            raise ValueError(f"duplicate feed in {path}:{lineno}: {name}")
-        seen.add(name)
-        feeds.append(Feed(name=name, url=url.rstrip("/"), required=parse_bool(required)))
-    if not feeds:
-        raise ValueError(f"feed list is empty: {path}")
-    return feeds
+def extract_package_version(filename: str, package: str) -> str:
+    prefix = f"{package}-"
+    if not filename.endswith(".apk") or not filename.startswith(prefix):
+        raise ValueError(f"daed manifest filename {filename!r} does not match package {package}")
+    return filename[len(prefix) : -len(".apk")]
 
 
 def request_headers() -> dict[str, str]:
@@ -87,13 +73,25 @@ def request_headers() -> dict[str, str]:
     return headers
 
 
-def fetch_bytes(url: str, *, timeout: int, retries: int) -> bytes:
+def fetch_bytes(
+    url: str,
+    *,
+    timeout: int,
+    retries: int,
+    max_bytes: int = MAX_METADATA_BYTES,
+) -> bytes:
     last_error: Exception | None = None
     for attempt in range(1, retries + 1):
         request = urllib.request.Request(url, headers=request_headers())
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                return response.read()
+                content_length = int(response.headers.get("Content-Length") or 0)
+                if content_length > max_bytes:
+                    raise RuntimeError(f"response exceeds size limit for {url}: {content_length} bytes")
+                payload = response.read(max_bytes + 1)
+                if len(payload) > max_bytes:
+                    raise RuntimeError(f"response exceeds size limit for {url}: more than {max_bytes} bytes")
+                return payload
         except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
             last_error = exc
             if attempt == retries:
@@ -103,9 +101,16 @@ def fetch_bytes(url: str, *, timeout: int, retries: int) -> bytes:
     raise RuntimeError(f"request failed for {url}: {last_error}")
 
 
-def download_url(url: str, output: Path, *, timeout: int, retries: int) -> None:
+def download_url(
+    url: str,
+    output: Path,
+    *,
+    timeout: int,
+    retries: int,
+    max_bytes: int = MAX_DOWNLOAD_BYTES,
+) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    data = fetch_bytes(url, timeout=timeout, retries=retries)
+    data = fetch_bytes(url, timeout=timeout, retries=retries, max_bytes=max_bytes)
     output.write_bytes(data)
     if output.stat().st_size == 0:
         raise RuntimeError(f"downloaded empty file: {url}")
@@ -152,51 +157,6 @@ def release_api_url(repo: str, tag: str | None) -> str:
     return f"{base}/latest"
 
 
-def select_release_asset(assets: list[dict], pattern: str) -> dict:
-    matches = [asset for asset in assets if fnmatch.fnmatch(str(asset.get("name", "")), pattern)]
-    if len(matches) != 1:
-        names = ", ".join(str(asset.get("name", "")) for asset in matches) or "none"
-        raise ValueError(f"expected one release asset matching {pattern}, found {len(matches)}: {names}")
-    return matches[0]
-
-
-def append_feeds(feed_file: Path, repositories_conf: Path) -> None:
-    feeds = read_feeds(feed_file)
-    repositories_conf.parent.mkdir(parents=True, exist_ok=True)
-    existing = repositories_conf.read_text(encoding="utf-8") if repositories_conf.exists() else ""
-    lines = [line for line in existing.splitlines() if "option check_signature" not in line]
-    for feed in feeds:
-        prefix = f"src/gz {feed.name} "
-        if not any(line.startswith(prefix) for line in lines):
-            lines.append(f"src/gz {feed.name} {feed.url}")
-    repositories_conf.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print("Configured repositories:")
-    for line in lines:
-        if line.startswith("src/gz "):
-            print(line)
-
-
-def check_feed(feed: Feed, *, timeout: int, retries: int) -> bool:
-    url = f"{feed.url}/Packages.gz"
-    print(f"Probing feed {feed.name}: {url}")
-    try:
-        fetch_bytes(url, timeout=timeout, retries=retries)
-    except Exception as exc:
-        message = f"feed unreachable: {feed.name} ({url}): {exc}"
-        if feed.required:
-            print(f"::error::{message}", file=sys.stderr)
-            return False
-        print(f"warning: optional {message}", file=sys.stderr)
-        return True
-    print(f"  ok {feed.name} reachable")
-    return True
-
-
-def cmd_package_string(args: argparse.Namespace) -> int:
-    print(" ".join(read_packages(args.package_file)))
-    return 0
-
-
 def cmd_imagebuilder_info(args: argparse.Namespace) -> int:
     base_url = f"https://downloads.immortalwrt.org/releases/{args.version}/targets/{args.target.strip('/')}"
     archive = imagebuilder_archive_name(args.version, args.target)
@@ -225,28 +185,59 @@ def cmd_download_url(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_append_feeds(args: argparse.Namespace) -> int:
-    append_feeds(args.feed_file, args.repositories_conf)
-    return 0
+def cmd_daed_packages(args: argparse.Namespace) -> int:
+    config = load_daed_config(args.config)
+    feed_dir = f"{config['base_url']}/{config['sdk']}/{config['arch']}"
+    manifest_url = f"{feed_dir}/manifest-daede.txt"
+    manifest = parse_daed_manifest(
+        fetch_bytes(
+            manifest_url,
+            timeout=args.timeout,
+            retries=args.retries,
+            max_bytes=MAX_METADATA_BYTES,
+        ).decode("utf-8")
+    )
 
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    recorded: dict[str, dict[str, str]] = {}
+    for package in config["packages"]:
+        fields = manifest.get(package)
+        if fields is None:
+            raise ValueError(f"daed manifest has no entry for required package: {package}")
+        expected_sha = fields.get("sha256") or ""
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+            raise ValueError(f"daed manifest has invalid sha256 for {package}: {expected_sha!r}")
+        filename = str((config.get("pin") or {}).get(package) or fields["filename"])
+        url = f"{feed_dir}/{filename}"
+        output = args.out_dir / filename
+        download_url(
+            url,
+            output,
+            timeout=args.timeout,
+            retries=args.retries,
+            max_bytes=MAX_DOWNLOAD_BYTES,
+        )
+        actual = sha256_file(output)
+        if actual != expected_sha:
+            raise ValueError(f"sha256 mismatch for {filename}: expected {expected_sha}, got {actual}")
+        recorded[package] = {
+            "filename": filename,
+            "version": extract_package_version(filename, package),
+            "sha256": actual,
+            "url": url,
+        }
+        print(f"fetched daed package: {package} {filename} sha256={actual}")
 
-def cmd_check_feeds(args: argparse.Namespace) -> int:
-    feeds = read_feeds(args.feed_file)
-    results = [check_feed(feed, timeout=args.timeout, retries=args.retries) for feed in feeds]
-    if not all(results):
-        raise RuntimeError("one or more required feeds are unreachable")
-    return 0
-
-
-def cmd_download_release_asset(args: argparse.Namespace) -> int:
-    release = github_api_json(release_api_url(args.repo, args.tag), timeout=args.timeout, retries=args.retries)
-    asset = select_release_asset(release.get("assets", []), args.pattern)
-    url = str(asset.get("browser_download_url") or "")
-    if not url:
-        raise ValueError(f"release asset has no browser_download_url: {asset.get('name')}")
-    output = args.dir / str(asset["name"])
-    download_url(url, output, timeout=args.timeout, retries=args.retries)
-    print(f"downloaded release asset: {args.repo}@{release.get('tag_name')} {output}")
+    write_json(
+        args.metadata_out,
+        {
+            "feed": config["base_url"],
+            "sdk": config["sdk"],
+            "arch": config["arch"],
+            "packages": recorded,
+        },
+    )
+    print(f"recorded daed package metadata: {args.metadata_out}")
     return 0
 
 
@@ -313,10 +304,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    package_string = subparsers.add_parser("package-string", help="print packages as a single ImageBuilder string")
-    package_string.add_argument("--package-file", type=Path, required=True)
-    package_string.set_defaults(func=cmd_package_string)
-
     imagebuilder_info = subparsers.add_parser("imagebuilder-info", help="resolve and verify ImageBuilder metadata")
     imagebuilder_info.add_argument("--version", required=True)
     imagebuilder_info.add_argument("--target", default="x86/64")
@@ -331,23 +318,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common_network_args(download)
     download.set_defaults(func=cmd_download_url)
 
-    append = subparsers.add_parser("append-feeds", help="append configured feeds to repositories.conf")
-    append.add_argument("--feed-file", type=Path, required=True)
-    append.add_argument("--repositories-conf", type=Path, required=True)
-    append.set_defaults(func=cmd_append_feeds)
-
-    check_feeds = subparsers.add_parser("check-feeds", help="probe configured feed Packages.gz files")
-    check_feeds.add_argument("--feed-file", type=Path, required=True)
-    add_common_network_args(check_feeds)
-    check_feeds.set_defaults(func=cmd_check_feeds)
-
-    download_asset = subparsers.add_parser("download-release-asset", help="download exactly one GitHub Release asset")
-    download_asset.add_argument("--repo", required=True)
-    download_asset.add_argument("--tag", default="latest")
-    download_asset.add_argument("--pattern", required=True)
-    download_asset.add_argument("--dir", type=Path, required=True)
-    add_common_network_args(download_asset)
-    download_asset.set_defaults(func=cmd_download_release_asset)
+    daed_packages = subparsers.add_parser(
+        "daed-packages",
+        help="download sha256-verified daed apk packages from the kenzok8 feed into the ImageBuilder local package dir",
+    )
+    daed_packages.add_argument("--config", type=Path, required=True)
+    daed_packages.add_argument("--out-dir", type=Path, required=True)
+    daed_packages.add_argument("--metadata-out", type=Path, required=True)
+    add_common_network_args(daed_packages)
+    daed_packages.set_defaults(func=cmd_daed_packages)
 
     verify_records = subparsers.add_parser("verify-records", help="verify manifest/docs contain expected release tags")
     verify_records.add_argument("--manifest", type=Path, required=True)

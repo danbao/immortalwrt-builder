@@ -3,10 +3,18 @@ name: Build OpenWrt
 on:
   workflow_dispatch:
     inputs:
-      ib_version:
-        description: ImmortalWrt ImageBuilder version; use 25.12.1 with publish_release=false for dry-run validation
+      runner:
+        description: Runner label; use self-hosted to build on your own runner (label must include "self-hosted")
         required: true
-        default: "24.10.6"
+        default: "ubuntu-latest"
+        type: choice
+        options:
+          - "ubuntu-latest"
+          - "self-hosted"
+      ib_version:
+        description: ImmortalWrt ImageBuilder version; default 25.12.1, override only with publish_release=false for dry-run validation
+        required: true
+        default: "25.12.1"
       publish_release:
         description: Publish GitHub Release and record manifest/docs
         required: true
@@ -27,8 +35,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '24.10.6' }}
+  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '25.12.1' }}
   PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || 'true' }}
+  DAED_PACKAGES: luci luci-i18n-base-zh-cn luci-theme-argon luci-app-vlmcsd daed luci-app-daede
 
 jobs:
   schedule:
@@ -56,12 +65,18 @@ jobs:
   build:
     needs: schedule
     if: needs.schedule.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
+    # Scheduled runs always use the GitHub-hosted runner; manual dispatch can pick "self-hosted".
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Clean workspace from previous runs
+        run: |
+          rm -rf imagebuilder build-out dist "immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst"
+          mkdir -p build-out dist
 
       - name: Install dependencies
         run: |
@@ -116,84 +131,45 @@ jobs:
             .config
           grep -E "^(CONFIG_(ISO|QCOW2|VDI|VMDK|VHDX)_IMAGES|# CONFIG_(ISO|QCOW2|VDI|VMDK|VHDX)_IMAGES)" .config
 
-      - name: Configure third-party package feeds
+      - name: Fetch daed packages
+        run: |
+          mkdir -p imagebuilder/packages dist
+          python3 scripts/openwrt_build_preflight.py daed-packages \
+            --config config/daed-feed.json \
+            --out-dir imagebuilder/packages \
+            --metadata-out dist/daed-packages.json \
+            --retries 8 \
+            --timeout 300
+          ls -lh imagebuilder/packages/
+
+      - name: Build daed image
         run: |
           cd imagebuilder
-          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" append-feeds \
-            --feed-file "${GITHUB_WORKSPACE}/config/third-party-feeds.tsv" \
-            --repositories-conf repositories.conf
+          make manifest PROFILE="generic" PACKAGES="${DAED_PACKAGES}" | tee /tmp/daed.packages.manifest.log
+          mkdir -p "${GITHUB_WORKSPACE}/build-out"
+          awk '/^[A-Za-z0-9_.+:-]+ - / {print}' /tmp/daed.packages.manifest.log \
+            > "${GITHUB_WORKSPACE}/build-out/daed.packages.manifest"
+          test -s "${GITHUB_WORKSPACE}/build-out/daed.packages.manifest"
+          grep -Eq '^daed - ' "${GITHUB_WORKSPACE}/build-out/daed.packages.manifest"
+          grep -Eq '^luci-app-daede - ' "${GITHUB_WORKSPACE}/build-out/daed.packages.manifest"
+          grep -Eq '^luci-app-vlmcsd - ' "${GITHUB_WORKSPACE}/build-out/daed.packages.manifest"
+          forbidden_packages='^(luci-app-passwall2|luci-app-openclash|luci-app-nikki|luci-i18n-nikki-zh-cn|nikki|mihomo-meta|luci-app-mosdns|mosdns) - '
+          if grep -Eq "${forbidden_packages}" "${GITHUB_WORKSPACE}/build-out/daed.packages.manifest"; then
+            echo "Manifest unexpectedly contains a removed proxy or DNS package:" >&2
+            grep -E "${forbidden_packages}" "${GITHUB_WORKSPACE}/build-out/daed.packages.manifest" >&2
+            exit 1
+          fi
+          rm -rf bin/targets/x86/64
+          make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="${DAED_PACKAGES}"
 
-      - name: Verify third-party feeds are reachable
-        run: |
-          python3 scripts/openwrt_build_preflight.py check-feeds \
-            --feed-file config/third-party-feeds.tsv \
-            --retries 3 \
-            --timeout 20
-
-      - name: Add local packages
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          cd imagebuilder
-          mkdir -p packages
-          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
-            --repo Openwrt-Passwall/openwrt-passwall2 \
-            --pattern 'luci-app-passwall2_*_all.ipk' \
-            --dir packages \
-            --retries 8 \
-            --timeout 60
-          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
-            --repo asvow/luci-app-tailscale \
-            --pattern 'luci-app-tailscale_*_all.ipk' \
-            --dir packages \
-            --retries 8 \
-            --timeout 60
-          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
-            --repo sbwml/luci-app-mosdns \
-            --pattern 'x86_64-openwrt-24.10.tar.gz' \
-            --dir /tmp/mosdns \
-            --retries 8 \
-            --timeout 120
-          python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" download-release-asset \
-            --repo kenzok8/openwrt-daede \
-            --pattern 'luci-app-daede_*_all.ipk' \
-            --dir packages \
-            --retries 8 \
-            --timeout 60
-          mkdir -p /tmp/mosdns/extract
-          tar -xzf /tmp/mosdns/x86_64-openwrt-24.10.tar.gz -C /tmp/mosdns/extract
-          # Move each extracted ipk verbosely so multi-ipk bundles are easy to debug.
-          find /tmp/mosdns/extract -type f -name '*.ipk' -print -exec mv -f {} packages/ \;
-          ls -lh packages/
-
-      - name: Build images
-        run: |
-          cd imagebuilder
-          build_flavor() {
-            flavor="$1"
-            package_file="$2"
-            output_name="$3"
-
-            echo "Building ${flavor} image from ${package_file}"
-            packages="$(python3 "${GITHUB_WORKSPACE}/scripts/openwrt_build_preflight.py" package-string --package-file "${package_file}")"
-            make manifest PROFILE="generic" PACKAGES="${packages}"
-            rm -rf bin/targets/x86/64
-            make image PROFILE="generic" FILES="${GITHUB_WORKSPACE}/files" ROOTFS_PARTSIZE="2048" PACKAGES="${packages}"
-
-            shopt -s nullglob
-            images=(bin/targets/x86/64/*squashfs-combined-efi.img.gz)
-            if [ "${#images[@]}" -ne 1 ]; then
-              echo "Expected exactly one ${flavor} squashfs EFI image, found ${#images[@]}" >&2
-              printf '%s\n' "${images[@]}" >&2
-              exit 1
-            fi
-            mkdir -p "${GITHUB_WORKSPACE}/build-out"
-            cp "${images[0]}" "${GITHUB_WORKSPACE}/build-out/${output_name}"
-            ls -lh "${GITHUB_WORKSPACE}/build-out/${output_name}"
-          }
-
-          build_flavor "standard" "${GITHUB_WORKSPACE}/config/openwrt-packages.txt" "immortalwrt-x86-64.img.gz"
-          build_flavor "daed" "${GITHUB_WORKSPACE}/config/openwrt-packages-daed.txt" "immortalwrt-x86-64-daed.img.gz"
+          shopt -s nullglob
+          images=(bin/targets/x86/64/*squashfs-combined-efi.img.gz)
+          if [ "${#images[@]}" -ne 1 ]; then
+            echo "Expected exactly one daed squashfs EFI image, found ${#images[@]}" >&2
+            printf '%s\n' "${images[@]}" >&2
+            exit 1
+          fi
+          cp "${images[0]}" "${GITHUB_WORKSPACE}/build-out/immortalwrt-x86-64-daed.img.gz"
           ls -lh "${GITHUB_WORKSPACE}/build-out/"
 
       - name: Convert to OVA

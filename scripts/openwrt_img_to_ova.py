@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "8"
+BUILDER_VERSION = "9"
 
 
 @dataclass(frozen=True)

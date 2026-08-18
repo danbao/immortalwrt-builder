@@ -1,3 +1,0 @@
-# name	url	required
-nikki	https://nikkinikki.pages.dev/openwrt-24.10/x86_64/nikki	true
-passwall_packages	https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/x86_64/passwall_packages	true
