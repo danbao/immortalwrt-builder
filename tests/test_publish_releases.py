@@ -142,7 +142,10 @@ class PublishReleasesTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="{}", stderr="")
 
             remote_assets = [
-                *({"name": path.name} for path in assets),
+                *(
+                    {"name": path.name, "digest": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"}
+                    for path in assets
+                ),
                 {"name": "immortalwrt-x86-64-daed-old.ova.sha256"},
                 {"name": "manual-notes.txt"},
             ]
@@ -151,14 +154,24 @@ class PublishReleasesTests(unittest.TestCase):
             ), mock.patch.object(publish_releases, "run", side_effect=fake_run):
                 self.assertFalse(publish_releases.publish_item(item, tmp))
 
-            upload = next(command for command in calls if command[:3] == ["gh", "release", "upload"])
-            self.assertEqual(upload[4:-1], [str(path.resolve()) for path in assets])
+            self.assertFalse(any(command[:3] == ["gh", "release", "upload"] for command in calls))
+            self.assertFalse(any(command[:3] == ["gh", "release", "edit"] for command in calls))
             deleted = [command[4] for command in calls if command[:3] == ["gh", "release", "delete-asset"]]
             self.assertEqual(deleted, ["immortalwrt-x86-64-daed-old.ova.sha256"])
-            edit = next(command for command in calls if command[:3] == ["gh", "release", "edit"])
-            notes = edit[edit.index("--notes") + 1]
-            self.assertIn("official-immortalwrt", notes)
-            self.assertIn("daed: `1.27.0-r1`", notes)
+
+    def test_existing_release_rejects_remote_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            root = Path(tmp_s)
+            item = self.make_release_item(root)
+            remote_assets = [
+                {"name": Path(path).name, "digest": "sha256:" + "0" * 64}
+                for path in item["release_assets"]
+            ]
+            with mock.patch.object(publish_releases, "release_exists", return_value=True), mock.patch.object(
+                publish_releases, "list_release_assets", return_value=remote_assets
+            ):
+                with self.assertRaisesRegex(RuntimeError, "digest mismatch"):
+                    publish_releases.publish_item(item, root)
 
     def test_release_payload_rejects_checksum_mismatch_and_unrelated_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:

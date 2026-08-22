@@ -183,11 +183,20 @@ def validate_release_payload(
     return assets
 
 
-def verify_release_assets(tag: str, expected_names: set[str]) -> None:
-    names = release_asset_names(tag)
-    missing = expected_names - names
+def verify_release_assets(tag: str, expected_assets: list[Path]) -> None:
+    remote_assets = {str(asset.get("name", "")): asset for asset in list_release_assets(tag)}
+    expected_names = {path.name for path in expected_assets}
+    missing = expected_names - set(remote_assets)
     if missing:
         raise RuntimeError(f"release {tag} is missing asset(s): {', '.join(sorted(missing))}")
+    for path in expected_assets:
+        expected_digest = f"sha256:{sha256_file(path)}"
+        remote_digest = str(remote_assets[path.name].get("digest") or "")
+        if remote_digest != expected_digest:
+            raise RuntimeError(
+                f"release {tag} asset digest mismatch for {path.name}: "
+                f"expected {expected_digest}, got {remote_digest or 'missing'}"
+            )
 
 
 def delete_stale_assets(tag: str, keep_assets: set[str]) -> None:
@@ -249,15 +258,9 @@ def publish_item(
     expected_names = {path.name for path in assets}
     notes = release_notes(item)
     if release_exists(tag):
-        result = run(["gh", "release", "edit", tag, "--title", item["release_title"], "--notes", notes], check=False)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip())
-        result = run(["gh", "release", "upload", str(tag), *(str(path) for path in assets), "--clobber"], check=False)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip())
+        verify_release_assets(str(tag), assets)
         delete_stale_assets(tag, expected_names)
-        verify_release_assets(tag, expected_names)
-        print(f"updated existing release: {tag}")
+        print(f"verified existing immutable release: {tag}")
         return False
 
     command = [
@@ -274,7 +277,7 @@ def publish_item(
     result = run(command, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())
-    verify_release_assets(tag, expected_names)
+    verify_release_assets(str(tag), assets)
     print(f"published release: {tag}")
     return True
 

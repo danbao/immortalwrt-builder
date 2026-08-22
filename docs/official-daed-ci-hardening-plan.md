@@ -176,10 +176,13 @@ profile, root filesystem size, NIC count, and workflow run URL.
 Refactor `scripts/publish_releases.py` so it:
 
 - validates that `release_assets` is present and non-empty;
-- uploads every declared asset;
+- uploads every declared asset when creating a new Release;
 - verifies the exact set of managed asset names after publication;
 - removes stale managed assets when required;
 - preserves assets that are not managed by this workflow;
+- treats an existing Release as immutable: every expected remote GitHub digest
+  must match before an idempotent rerun succeeds, and historical assets are
+  never overwritten with `--clobber`;
 - keeps current tags, release naming, family grouping, and retention behavior.
 
 If release publication succeeds but committing or pushing the generated

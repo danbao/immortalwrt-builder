@@ -79,7 +79,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 6. `validate` 模式到此结束；其他模式执行 `make image`，并强制要求恰好一个 raw image、一个最终 manifest 和一个 CycloneDX SBOM。
 7. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，再由 `prepare-assets` 生成统一校验和、供应链元数据和确定性 buildinfo 归档。
 8. `dry-run` 只上传临时 Artifact；`publish` 将一日有效的交接 Artifact 传给 GitHub 托管发布 job。
-9. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 幂等创建或更新 Release；发布端重新限制 tag 和资产路径，并逐项复验 `.ova.sha256` 与 `SHA256SUMS`，不直接信任构建 runner 的交接声明。
+9. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 创建 Release；发布端重新限制 tag 和资产路径，并逐项复验 `.ova.sha256` 与 `SHA256SUMS`，不直接信任构建 runner 的交接声明。已有 Release 视为不可变，只在远端 digest 完全一致时作为幂等成功，禁止覆盖历史资产。
 10. 发布成功后由 `scripts/update_release_records.py` 确定性重建 `manifests/converted-images.json` 和 `docs/converted-images.md`；遇到并发 push 冲突会拉取最新目标分支并最多重试三次。Release 不会因记录提交失败而回滚。
 
 转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。定时 workflow 只代表定期检查和构建，镜像 SHA 未变化时不会发布新 Release。Release 清理按 daed family 保留最近 30 个；历史 standard family 也继续按最近 30 个修剪。
@@ -197,7 +197,7 @@ python3 scripts/publish_releases.py dist/build-results.json \
   --expected-workflow-run-url <workflow-run-url>
 ```
 
-脚本只创建不存在的 Release tag；如果 tag 已存在，会更新标题、说明和资产。成功发布新 Release 后，脚本会按 family 分别保留最近 30 个自动发布的 OpenWrt Release，并删除更旧的自动 Release 及其 tag。手工创建且不匹配本项目自动 tag 格式的 Release 不会被清理。
+脚本只创建不存在的 Release tag；如果 tag 已存在，会验证全部预期资产的 GitHub SHA256 digest，任何缺失或差异都会失败，不会使用 `--clobber` 覆盖历史资产。成功发布新 Release 后，脚本会按 family 分别保留最近 30 个自动发布的 OpenWrt Release，并删除更旧的自动 Release 及其 tag。手工创建且不匹配本项目自动 tag 格式的 Release 不会被清理。
 
 ## 维护指南
 
@@ -236,7 +236,7 @@ ruby -e 'require "yaml"; YAML.load_file(".github/workflows/build-openwrt.yml"); 
 
 `skip already converted`：当前镜像 SHA256 和 `BUILDER_VERSION` 已存在于 `manifests/converted-images.json`。如果转换逻辑或 Release tag 规则确实变了，先递增 `BUILDER_VERSION`。
 
-GitHub Release 已存在：`publish_releases.py` 会更新标题、说明和全部托管资产，同时保留人工添加的非托管资产，适合重复运行和记录修复。
+GitHub Release 已存在：`publish_releases.py` 会复验全部托管资产；完全一致时幂等通过并保留人工添加的非托管资产，不一致时拒绝覆盖。记录修复仍可安全重跑。
 
 Release 太多：发布脚本默认按 family 各保留最近 30 个自动 Release；如需调整，修改 workflow 中的 `--keep-releases` 参数。
 
