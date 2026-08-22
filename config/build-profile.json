@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "name": "immortalwrt-x86-64-daed",
+  "profile": "generic",
+  "rootfs_partsize": 2048,
+  "nic_count": 1,
+  "image_glob": "*squashfs-combined-efi.img.gz",
+  "packages": [
+    "luci",
+    "luci-i18n-base-zh-cn",
+    "luci-theme-argon",
+    "luci-app-vlmcsd",
+    "luci-i18n-firewall-zh-cn",
+    "luci-i18n-package-manager-zh-cn",
+    "daed",
+    "daed-geoip",
+    "daed-geosite",
+    "luci-app-daed",
+    "luci-i18n-daed-zh-cn"
+  ],
+  "required_packages": [
+    "luci",
+    "luci-i18n-base-zh-cn",
+    "luci-theme-argon",
+    "luci-app-vlmcsd",
+    "luci-i18n-firewall-zh-cn",
+    "luci-i18n-package-manager-zh-cn",
+    "daed",
+    "daed-geoip",
+    "daed-geosite",
+    "luci-app-daed",
+    "luci-i18n-daed-zh-cn"
+  ],
+  "forbidden_packages": [
+    "luci-app-daede",
+    "luci-app-passwall2",
+    "luci-app-openclash",
+    "luci-app-nikki",
+    "luci-i18n-nikki-zh-cn",
+    "nikki",
+    "mihomo-meta",
+    "luci-app-mosdns",
+    "mosdns"
+  ]
+}

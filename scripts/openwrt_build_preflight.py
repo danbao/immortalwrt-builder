@@ -19,6 +19,24 @@ from pathlib import Path
 DEFAULT_USER_AGENT = "danbao-openwrt-builder"
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+REQUIRED_IMAGEBUILDER_OPTIONS = (
+    "CONFIG_SIGNED_PACKAGES",
+    "CONFIG_SIGNATURE_CHECK",
+    "CONFIG_DOWNLOAD_CHECK_CERTIFICATE",
+    "CONFIG_JSON_OVERVIEW_IMAGE_INFO",
+    "CONFIG_JSON_CYCLONEDX_SBOM",
+)
+PROFILE_REQUIRED_FIELDS = (
+    "schema_version",
+    "name",
+    "profile",
+    "rootfs_partsize",
+    "nic_count",
+    "image_glob",
+    "packages",
+    "required_packages",
+    "forbidden_packages",
+)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -26,43 +44,99 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def load_daed_config(path: Path) -> dict:
-    config = json.loads(path.read_text(encoding="utf-8"))
-    for key in ("base_url", "sdk", "arch"):
-        if not config.get(key):
-            raise ValueError(f"daed feed config is missing required key: {key}")
-    if not isinstance(config.get("packages"), list) or not config["packages"]:
-        raise ValueError("daed feed config packages must be a non-empty list")
-    config["base_url"] = str(config["base_url"]).rstrip("/")
-    return config
+def _validate_string_list(profile: dict, key: str) -> list[str]:
+    values = profile.get(key)
+    if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
+        raise ValueError(f"build profile {key} must be a list of non-empty strings")
+    if len(values) != len(set(values)):
+        raise ValueError(f"build profile {key} contains a duplicate package")
+    return values
 
 
-def parse_daed_manifest(payload: str) -> dict[str, dict[str, str]]:
-    entries: dict[str, dict[str, str]] = {}
-    for lineno, line in enumerate(payload.splitlines(), start=1):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        name, _, value = line.partition("=")
-        name = name.strip()
-        value = value.strip()
-        if not name or not value:
-            raise ValueError(f"invalid daed manifest line {lineno}: {line!r}")
-        if name.endswith("_sha256"):
-            entries.setdefault(name[: -len("_sha256")], {})["sha256"] = value
-        else:
-            entries.setdefault(name, {})["filename"] = value
-    for package, fields in entries.items():
-        if not fields.get("filename"):
-            raise ValueError(f"daed manifest is missing a filename entry for {package}")
-    return entries
+def load_build_profile(path: Path) -> dict:
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    missing_fields = [key for key in PROFILE_REQUIRED_FIELDS if key not in profile]
+    if missing_fields:
+        raise ValueError(f"build profile is missing required field(s): {', '.join(missing_fields)}")
+    if profile["schema_version"] != 1:
+        raise ValueError(f"unsupported build profile schema_version: {profile['schema_version']!r}")
+    for key in ("name", "profile", "image_glob"):
+        if not isinstance(profile[key], str) or not profile[key].strip():
+            raise ValueError(f"build profile {key} must be a non-empty string")
+    for key in ("rootfs_partsize", "nic_count"):
+        if not isinstance(profile[key], int) or isinstance(profile[key], bool) or profile[key] < 1:
+            raise ValueError(f"build profile {key} must be a positive integer")
+
+    packages = _validate_string_list(profile, "packages")
+    required = _validate_string_list(profile, "required_packages")
+    forbidden = _validate_string_list(profile, "forbidden_packages")
+    missing_packages = sorted(set(required) - set(packages))
+    if missing_packages:
+        raise ValueError(f"build profile is missing required package(s): {', '.join(missing_packages)}")
+    forbidden_packages = sorted(set(forbidden) & set(packages))
+    if forbidden_packages:
+        raise ValueError(f"build profile contains forbidden package(s): {', '.join(forbidden_packages)}")
+    return profile
 
 
-def extract_package_version(filename: str, package: str) -> str:
-    prefix = f"{package}-"
-    if not filename.endswith(".apk") or not filename.startswith(prefix):
-        raise ValueError(f"daed manifest filename {filename!r} does not match package {package}")
-    return filename[len(prefix) : -len(".apk")]
+def validate_imagebuilder_config(payload: str) -> None:
+    enabled = {
+        match.group(1)
+        for line in payload.splitlines()
+        if (match := re.fullmatch(r"(CONFIG_[A-Z0-9_]+)=y", line.strip()))
+    }
+    missing = [option for option in REQUIRED_IMAGEBUILDER_OPTIONS if option not in enabled]
+    if missing:
+        raise ValueError(f"ImageBuilder config is missing required option(s): {', '.join(missing)}")
+
+
+def parse_package_manifest(payload: str) -> dict[str, str]:
+    packages: dict[str, str] = {}
+    for line in payload.splitlines():
+        match = re.fullmatch(r"([A-Za-z0-9_.+:-]+)\s+-\s+(.+)", line.strip())
+        if match:
+            packages[match.group(1)] = match.group(2).strip()
+    if not packages:
+        raise ValueError("package manifest contains no package entries")
+    return packages
+
+
+def validate_package_manifest(payload: str, profile: dict) -> dict[str, str]:
+    packages = parse_package_manifest(payload)
+    missing = sorted(set(profile["required_packages"]) - set(packages))
+    if missing:
+        raise ValueError(f"package manifest is missing required package(s): {', '.join(missing)}")
+    forbidden = sorted(set(profile["forbidden_packages"]) & set(packages))
+    if forbidden:
+        raise ValueError(f"package manifest contains forbidden package(s): {', '.join(forbidden)}")
+    return packages
+
+
+def collect_image_outputs(target_dir: Path, image_glob: str, out_dir: Path) -> dict[str, Path]:
+    images = sorted(path for path in target_dir.glob(image_glob) if path.is_file())
+    if len(images) != 1:
+        raise ValueError(f"expected exactly one image matching {image_glob}, found {len(images)}")
+    image = images[0]
+    if not image.name.endswith(".img.gz"):
+        raise ValueError(f"selected image does not end with .img.gz: {image}")
+    image_base = image.with_name(image.name.removesuffix(".img.gz"))
+    manifest = Path(f"{image_base}.manifest")
+    sbom = Path(f"{image_base}.bom.cdx.json")
+    for path, label in ((manifest, "manifest"), (sbom, "SBOM")):
+        if not path.is_file():
+            raise FileNotFoundError(f"required final image {label} is missing: {path}")
+        if path.stat().st_size == 0:
+            raise RuntimeError(f"required final image {label} is empty: {path}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outputs = {
+        "image": out_dir / "immortalwrt-x86-64-daed.img.gz",
+        "manifest": out_dir / "final-image.manifest",
+        "sbom": out_dir / "final-image.bom.cdx.json",
+    }
+    shutil.copy2(image, outputs["image"])
+    shutil.copy2(manifest, outputs["manifest"])
+    shutil.copy2(sbom, outputs["sbom"])
+    return outputs
 
 
 def request_headers() -> dict[str, str]:
@@ -185,59 +259,53 @@ def cmd_download_url(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_daed_packages(args: argparse.Namespace) -> int:
-    config = load_daed_config(args.config)
-    feed_dir = f"{config['base_url']}/{config['sdk']}/{config['arch']}"
-    manifest_url = f"{feed_dir}/manifest-daede.txt"
-    manifest = parse_daed_manifest(
-        fetch_bytes(
-            manifest_url,
-            timeout=args.timeout,
-            retries=args.retries,
-            max_bytes=MAX_METADATA_BYTES,
-        ).decode("utf-8")
-    )
+def cmd_validate_profile(args: argparse.Namespace) -> int:
+    profile = load_build_profile(args.config)
+    values = {
+        "BUILD_PROFILE": profile["profile"],
+        "ROOTFS_PARTSIZE": str(profile["rootfs_partsize"]),
+        "NIC_COUNT": str(profile["nic_count"]),
+        "IMAGE_GLOB": profile["image_glob"],
+        "BUILD_PACKAGES": " ".join(profile["packages"]),
+    }
+    if args.github_env:
+        write_env(args.github_env, values)
+    for key, value in values.items():
+        print(f"{key}={value}")
+    return 0
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    recorded: dict[str, dict[str, str]] = {}
-    for package in config["packages"]:
-        fields = manifest.get(package)
-        if fields is None:
-            raise ValueError(f"daed manifest has no entry for required package: {package}")
-        expected_sha = fields.get("sha256") or ""
-        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
-            raise ValueError(f"daed manifest has invalid sha256 for {package}: {expected_sha!r}")
-        filename = str((config.get("pin") or {}).get(package) or fields["filename"])
-        url = f"{feed_dir}/{filename}"
-        output = args.out_dir / filename
-        download_url(
-            url,
-            output,
-            timeout=args.timeout,
-            retries=args.retries,
-            max_bytes=MAX_DOWNLOAD_BYTES,
-        )
-        actual = sha256_file(output)
-        if actual != expected_sha:
-            raise ValueError(f"sha256 mismatch for {filename}: expected {expected_sha}, got {actual}")
-        recorded[package] = {
-            "filename": filename,
-            "version": extract_package_version(filename, package),
-            "sha256": actual,
-            "url": url,
-        }
-        print(f"fetched daed package: {package} {filename} sha256={actual}")
 
+def cmd_validate_imagebuilder(args: argparse.Namespace) -> int:
+    load_build_profile(args.profile)
+    validate_imagebuilder_config(args.config.read_text(encoding="utf-8"))
+    print(f"validated ImageBuilder security configuration: {args.config}")
+    return 0
+
+
+def cmd_validate_manifest(args: argparse.Namespace) -> int:
+    profile = load_build_profile(args.profile)
+    packages = validate_package_manifest(args.manifest.read_text(encoding="utf-8"), profile)
+    official_packages = {
+        package: packages[package]
+        for package in profile["required_packages"]
+        if package == "daed" or package.startswith("daed-") or package.startswith("luci-app-daed") or package.startswith("luci-i18n-daed")
+    }
     write_json(
         args.metadata_out,
         {
-            "feed": config["base_url"],
-            "sdk": config["sdk"],
-            "arch": config["arch"],
-            "packages": recorded,
+            "schema_version": 1,
+            "source": "official-immortalwrt",
+            "packages": official_packages,
         },
     )
-    print(f"recorded daed package metadata: {args.metadata_out}")
+    print(f"validated official package manifest: {args.manifest}")
+    return 0
+
+
+def cmd_collect_image_outputs(args: argparse.Namespace) -> int:
+    outputs = collect_image_outputs(args.target_dir, args.image_glob, args.out_dir)
+    for name, path in outputs.items():
+        print(f"{name}={path}")
     return 0
 
 
@@ -265,36 +333,6 @@ def cmd_verify_records(args: argparse.Namespace) -> int:
     return 0
 
 
-def resolve_built_image(path_value: str, source_dir: Path) -> Path:
-    image = Path(path_value)
-    candidates = [image]
-    if not image.is_absolute():
-        candidates.append(source_dir / image.name)
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise FileNotFoundError(f"built image not found: {path_value}")
-
-
-def cmd_copy_raw_images(args: argparse.Namespace) -> int:
-    payload = json.loads(args.results.read_text(encoding="utf-8"))
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for item in payload.get("built", []):
-        image_asset = item.get("image_asset")
-        if not image_asset:
-            raise ValueError(f"built item has no image_asset: {item}")
-        source = resolve_built_image(str(item["image_path"]), args.source_dir)
-        target = args.out_dir / str(image_asset)
-        shutil.copy2(source, target)
-        if target.stat().st_size == 0:
-            raise RuntimeError(f"copied empty raw image asset: {target}")
-        copied += 1
-        print(f"copied raw image asset: {source} -> {target}")
-    print(f"copied {copied} raw image asset(s)")
-    return 0
-
-
 def add_common_network_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--retries", type=int, default=5)
@@ -318,15 +356,33 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common_network_args(download)
     download.set_defaults(func=cmd_download_url)
 
-    daed_packages = subparsers.add_parser(
-        "daed-packages",
-        help="download sha256-verified daed apk packages from the kenzok8 feed into the ImageBuilder local package dir",
+    validate_profile = subparsers.add_parser("validate-profile", help="validate and export the build profile")
+    validate_profile.add_argument("--config", type=Path, required=True)
+    validate_profile.add_argument("--github-env", type=Path)
+    validate_profile.set_defaults(func=cmd_validate_profile)
+
+    validate_imagebuilder = subparsers.add_parser(
+        "validate-imagebuilder", help="validate ImageBuilder supply-chain security options"
     )
-    daed_packages.add_argument("--config", type=Path, required=True)
-    daed_packages.add_argument("--out-dir", type=Path, required=True)
-    daed_packages.add_argument("--metadata-out", type=Path, required=True)
-    add_common_network_args(daed_packages)
-    daed_packages.set_defaults(func=cmd_daed_packages)
+    validate_imagebuilder.add_argument("--profile", type=Path, required=True)
+    validate_imagebuilder.add_argument("--config", type=Path, required=True)
+    validate_imagebuilder.set_defaults(func=cmd_validate_imagebuilder)
+
+    validate_manifest = subparsers.add_parser(
+        "validate-manifest", help="validate official package availability and record versions"
+    )
+    validate_manifest.add_argument("--profile", type=Path, required=True)
+    validate_manifest.add_argument("--manifest", type=Path, required=True)
+    validate_manifest.add_argument("--metadata-out", type=Path, required=True)
+    validate_manifest.set_defaults(func=cmd_validate_manifest)
+
+    collect_outputs = subparsers.add_parser(
+        "collect-image-outputs", help="select exactly one image and copy its required audit sidecars"
+    )
+    collect_outputs.add_argument("--target-dir", type=Path, required=True)
+    collect_outputs.add_argument("--image-glob", required=True)
+    collect_outputs.add_argument("--out-dir", type=Path, required=True)
+    collect_outputs.set_defaults(func=cmd_collect_image_outputs)
 
     verify_records = subparsers.add_parser("verify-records", help="verify manifest/docs contain expected release tags")
     verify_records.add_argument("--manifest", type=Path, required=True)
@@ -336,12 +392,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_records.add_argument("--repo")
     add_common_network_args(verify_records)
     verify_records.set_defaults(func=cmd_verify_records)
-
-    copy_raw_images = subparsers.add_parser("copy-raw-images", help="copy built raw images to their release asset names")
-    copy_raw_images.add_argument("--results", type=Path, required=True)
-    copy_raw_images.add_argument("--source-dir", type=Path, required=True)
-    copy_raw_images.add_argument("--out-dir", type=Path, required=True)
-    copy_raw_images.set_defaults(func=cmd_copy_raw_images)
 
     return parser.parse_args(argv)
 

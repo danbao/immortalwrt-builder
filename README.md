@@ -11,6 +11,11 @@
 - `.ova`：ESXi 导入使用，包含 streamOptimized VMDK、OVF 描述和校验清单。
 - `.ova.sha256`：OVA 文件的 SHA256 校验值。
 - `.img.gz`：ImageBuilder 生成的原始压缩镜像，可用于 PVE 或其他支持 raw 镜像导入的环境。
+- `SHA256SUMS`：本次发布主要资产的统一 SHA256 清单。
+- `*.manifest`：最终镜像的软件包和版本清单。
+- `*.bom.cdx.json`：ImageBuilder 生成的 CycloneDX SBOM。
+- `build-metadata.json`：构建来源、profile、官方 daed 版本和工作流追溯信息。
+- `build-metadata.tar.gz`：确定性打包的 ImageBuilder 配置与 buildinfo 证据。
 
 Release tag 使用构建日期、ImmortalWrt commit 和镜像 SHA 标识版本：
 
@@ -47,14 +52,22 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 ## 自动构建流程
 
-主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每周一 02:00（Asia/Shanghai）运行，且仅在偶数 ISO 周实际构建（双周构建）。默认 ImageBuilder 版本为 `25.12.1`。手动触发时可以通过 `ib_version` 临时指定版本，并用 `publish_release=false` 做不发布 Release 的实验构建。
+主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每周一 02:00（Asia/Shanghai）运行，且仅在偶数 ISO 周实际构建（双周构建）。默认 ImageBuilder 版本为 `25.12.1`。手动触发提供三种 `build_mode`：
+
+- `validate`：只校验 ImageBuilder、安全配置和官方软件包 manifest。
+- `dry-run`：完整构建 IMG/OVA，但只保留 14 天 Actions Artifact。
+- `publish`（默认）：完整构建并发布 Release、更新转换记录。
+
+定时任务固定使用 `publish`。
 
 ### Runner 选择
 
 手动触发时可以选择 `runner`：
 
-- `ubuntu-latest`（默认）：GitHub 托管 runner，计划任务固定使用它。
-- `self-hosted`：使用你自己的 runner，label 必须包含 `self-hosted`。自托管 runner 需要满足：Linux + 免密 `sudo`（用于 `apt-get` 安装 qemu-utils/zstd 等依赖）、`qemu-img`、以及发布/记录步骤所需的 `gh` CLI（仅 `publish_release=true` 时需要）。自托管 runner 的工作目录会跨 run 保留，工作流开头会先清理上一次的 `imagebuilder/`、`build-out/`、`dist/`。
+- `ubuntu-24.04`（默认）：GitHub 托管 runner，计划任务固定使用它。
+- `self-hosted`：仅承担只读构建任务，label 必须包含 `self-hosted`。需要 Linux、免密 `sudo`、GitHub Actions Runner 新版 Action 所要求的 Node.js 运行能力。自托管 runner 不接收 `contents: write` token，也不执行发布。
+
+发布 job 始终在独立的 GitHub 托管 `ubuntu-24.04` runner 上运行，并且是唯一拥有 `contents: write` 权限的 job。
 
 工作流执行顺序：
 
@@ -62,11 +75,12 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 2. 读取上游 `sha256sums`，校验 ImageBuilder 文件名、下载地址和 SHA256 后，再下载并解压 `immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst`。
 3. 读取官方 `version.buildinfo`，采集 `r33869-cf234f8de6d5` 这类版本码，并提取 ImmortalWrt commit。
 4. 关闭 ISO、qcow2、VDI、VMDK、VHDX 等辅助镜像格式，只保留后续需要的 raw image。
-5. 调用 `scripts/openwrt_build_preflight.py daed-packages`，按 `config/daed-feed.json` 从 kenzok8 daed feed 下载 `daed` 与 `luci-app-daede` 两个 `.apk` 到 ImageBuilder 的 `packages/` 本地包目录；每个包先读 `manifest-daede.txt` 中的 sha256 并逐字节校验，并把实际安装的版本和校验值记录到 `dist/daed-packages.json`。其余依赖（`v2ray-geoip`、`v2ray-geosite`、`kmod-sched-core`、`kmod-sched-bpf`、`kmod-veth`、`ca-bundle` 等）全部来自官方 25.12.1 软件源，签名校验保持开启。
-6. 先执行 `make manifest` 断言依赖闭环：清单必须包含 `daed`、`luci-app-daede`、`luci-app-vlmcsd`，且不能出现 PassWall 2、OpenClash、Nikki、MosDNS 等被移除的透明代理/DNS 包；随后清理 `bin/targets/x86/64` 并执行 `make image`，写入 `build-out/immortalwrt-x86-64-daed.img.gz`。
-7. 调用 `scripts/openwrt_img_to_ova.py scan` 扫描 `build-out/` 并转换新镜像，传入构建日期、ImmortalWrt 版本码和 commit。
-8. 调用 `scripts/openwrt_build_preflight.py copy-raw-images` 按 `build-results.json` 复制 raw image，再调用 `scripts/publish_releases.py` 创建 GitHub Release，并校验 `.ova`、`.ova.sha256`、`.img.gz` 三类资产都已上传。
-9. 调用 `record` 更新 `manifests/converted-images.json` 和 `docs/converted-images.md`，再校验本次所有 Release tag 和 latest Release 已被记录，最后由 workflow 提交记录。
+5. 读取 `config/build-profile.json`，执行 `make manifest`，验证官方 `daed`、geodata、`luci-app-daed` 和中文翻译包齐全，同时拒绝旧 `luci-app-daede` 及冲突代理组件。
+6. `validate` 模式到此结束；其他模式执行 `make image`，并强制要求恰好一个 raw image、一个最终 manifest 和一个 CycloneDX SBOM。
+7. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，再由 `prepare-assets` 生成统一校验和、供应链元数据和确定性 buildinfo 归档。
+8. `dry-run` 只上传临时 Artifact；`publish` 将一日有效的交接 Artifact 传给 GitHub 托管发布 job。
+9. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 创建 Release；发布端重新限制 tag 和资产路径，并逐项复验 `.ova.sha256` 与 `SHA256SUMS`，不直接信任构建 runner 的交接声明。已有 Release 视为不可变，只在远端 digest 完全一致时作为幂等成功，禁止覆盖历史资产。
+10. 发布成功后由 `scripts/update_release_records.py` 确定性重建 `manifests/converted-images.json` 和 `docs/converted-images.md`；遇到并发 push 冲突会拉取最新目标分支并最多重试三次。Release 不会因记录提交失败而回滚。
 
 转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。定时 workflow 只代表定期检查和构建，镜像 SHA 未变化时不会发布新 Release。Release 清理按 daed family 保留最近 30 个；历史 standard family 也继续按最近 30 个修剪。
 
@@ -76,9 +90,10 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 - LuCI 中文界面和默认 Argon 主题
 - `luci-app-vlmcsd`（KMS 服务，与 ImmortalWrt 官方基线一致）
-- daed（kenzok8/openwrt-daede 一体包，含 dae 核心、dae-wing 和内嵌 Web 面板）
-- `luci-app-daede`（daed 的 LuCI 管理界面）
-- daed 依赖的 `v2ray-geoip`、`v2ray-geosite` 和 eBPF 相关 kmod 由官方源自动解决
+- ImmortalWrt 官方 `daed` 服务
+- 官方 `daed-geoip`、`daed-geosite`
+- 官方 `luci-app-daed` 与 `luci-i18n-daed-zh-cn`
+- 防火墙和软件包管理器中文翻译
 
 镜像明确不包含 PassWall 2、OpenClash、Nikki/Mihomo、MosDNS 等透明代理/DNS 插件，避免多套透明代理规则互相打架。
 
@@ -96,13 +111,23 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 - 默认启用 irqbalance 自启，把软中断和网卡中断分散到多个 CPU 核心。
 - 根分区大小为 2048 MB。
 
-导入虚拟机后，请为 LAN 配置一个不与主路由冲突的静态地址，然后进入 LuCI「服务 → daede」导入订阅并启动。
+导入虚拟机后，请为 LAN 配置一个不与主路由冲突的静态地址，然后通过官方 `luci-app-daed` 或 daed 支持的配置方式完成配置并启动服务。官方界面不保证复刻旧 daede 的订阅工作流；缺失的 UI 操作需要按 daed 官方配置格式手工完成。
 
 ## 关于 daed
 
-`dae` 是基于 eBPF 的高性能透明代理核心，`daed` 是把 dae 后端、API 和 Web Dashboard 打包在一起的一体化形态。本镜像只安装 `daed` 一个代理组件（不含独立 `dae` 包），需要热切换后端时再单独安装 `dae`。
+`dae` 是基于 eBPF 的高性能透明代理核心。本镜像强制使用经过 ImageBuilder 官方仓库签名链解析的 daed 软件包，不下载或注入第三方 APK，也不提供第三方源回退。工作流在构建前验证包签名、签名检查、TLS 证书检查、image manifest 和 CycloneDX SBOM 配置；任何安全选项或官方包缺失都会中止构建。
 
-daed 包与 `luci-app-daede` 来自 [kenzok8/openwrt-daede](https://github.com/kenzok8/openwrt-daede) 的 25.12 feed（其安装脚本指定的官方分发域名 `down.dllkids.xyz`）。该 feed 无 apk 签名，因此本仓库不把 feed 直接挂进 ImageBuilder 仓库列表，而是下载具体 `.apk` 到本地包目录：sha256 来自 feed 自带的 `manifest-daede.txt`，实际安装的版本与校验值写入 `dist/daed-packages.json` 随构建记录追溯；ImageBuilder 的签名校验保持开启。修改 `config/daed-feed.json` 属于安全敏感变更，需要说明来源可信。
+官方包默认把 daed 设为禁用，避免尚未初始化的 Dashboard 自动暴露。先在 LuCI「服务 → daed」设置监听地址并启用，或通过 SSH 执行：
+
+```sh
+uci set daed.config.enabled='1'
+uci set daed.config.listen_addr='0.0.0.0:2023'
+uci commit daed
+/etc/init.d/daed enable
+/etc/init.d/daed restart
+```
+
+随后通过 `http://<旁路由地址>:2023` 完成 Dashboard 初始化和配置。不要把 2023 端口开放到 WAN；需要限制管理来源时，应将监听地址绑定到管理网地址并配置防火墙。配置与订阅保存在官方包声明的 `/etc/daed/` 和 `/etc/config/daed` 中，重启测试应同时确认服务状态、配置持久化和 eBPF 转发效果。参考 [ImmortalWrt 官方 daed 包](https://github.com/immortalwrt/packages/tree/master/net/daed)、[ImmortalWrt 官方 LuCI 应用](https://github.com/immortalwrt/luci/tree/master/applications/luci-app-daed) 和 [dae 官方配置指南](https://github.com/daeuniverse/dae/blob/main/docs/en/README.md)。
 
 ## 本地转换
 
@@ -146,17 +171,33 @@ python3 scripts/openwrt_img_to_ova.py record \
   --doc docs/converted-images.md
 ```
 
-发布 GitHub Release 需要已认证的 GitHub CLI。发布脚本会同时上传 OVA、校验文件和原始 `.img.gz`，因此本地发布前需要先按 `build-results.json` 中的资产名复制原始镜像：
+发布 GitHub Release 需要已认证的 GitHub CLI。应先使用 `prepare-assets` 生成并在 `build-results.json` 中声明完整资产；以下参数按本地 ImageBuilder 输出调整：
 
 ```bash
-python3 scripts/openwrt_build_preflight.py copy-raw-images \
+python3 scripts/openwrt_img_to_ova.py prepare-assets \
   --results dist/build-results.json \
   --source-dir build-out \
-  --out-dir dist
-python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
+  --out-dir dist \
+  --profile config/build-profile.json \
+  --package-manifest build-out/final-image.manifest \
+  --sbom build-out/final-image.bom.cdx.json \
+  --package-metadata build-out/official-packages.json \
+  --build-info-file build-out/imagebuilder.config \
+  --imagebuilder-version 25.12.1 \
+  --imagebuilder-url <verified-imagebuilder-url> \
+  --imagebuilder-sha256 <verified-imagebuilder-sha256> \
+  --immortalwrt-version-code <version-code> \
+  --immortalwrt-commit <commit> \
+  --repository-commit <repository-commit> \
+  --workflow-run-url <workflow-run-url> \
+  --runner-type local
+python3 scripts/publish_releases.py dist/build-results.json \
+  --keep-releases 30 \
+  --expected-repository-commit <repository-commit> \
+  --expected-workflow-run-url <workflow-run-url>
 ```
 
-脚本只创建不存在的 Release tag；如果 tag 已存在，会更新标题、说明和资产。成功发布新 Release 后，脚本会按 family 分别保留最近 30 个自动发布的 OpenWrt Release，并删除更旧的自动 Release 及其 tag。手工创建且不匹配本项目自动 tag 格式的 Release 不会被清理。
+脚本只创建不存在的 Release tag；如果 tag 已存在，会验证全部预期资产的 GitHub SHA256 digest，任何缺失或差异都会失败，不会使用 `--clobber` 覆盖历史资产。成功发布新 Release 后，脚本会按 family 分别保留最近 30 个自动发布的 OpenWrt Release，并删除更旧的自动 Release 及其 tag。手工创建且不匹配本项目自动 tag 格式的 Release 不会被清理。
 
 ## 维护指南
 
@@ -173,7 +214,7 @@ python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
 - `*.mf`
 - `*.sha256`
 
-调整内置包列表时，修改 workflow 中的 `DAED_PACKAGES` 环境变量；调整 daed 第三方包来源时，修改 `config/daed-feed.json`。工作流会先跑 `make manifest` 断言和 sha256 校验，包名或校验值不匹配时直接失败，这比静默跳过更容易排查。
+调整 profile、内置包、rootfs 或输出匹配规则时，只修改 `config/build-profile.json`。`required_packages` 是构建安全门，`forbidden_packages` 用于阻止旧 daede 和冲突代理栈重新混入镜像。
 
 维护预检脚本时使用标准库，相关轻量测试位于 `tests/`。常用检查命令：
 
@@ -187,13 +228,15 @@ ruby -e 'require "yaml"; YAML.load_file(".github/workflows/build-openwrt.yml"); 
 
 `missing required tools: qemu-img`：安装 `qemu-utils` 后重试。
 
-`make image` 失败并提示找不到包：检查 workflow 中的 `DAED_PACKAGES` 列表、`config/daed-feed.json` 指向的 feed 目录是否仍然可用，以及 `dist/daed-packages.json` 中记录的包版本是否与官方 25.12.1 依赖匹配。kenzok8 滚动新版本后若出现依赖版本不匹配，可在 `config/daed-feed.json` 的 `pin` 字段锁定上一版可用文件名。
+`make manifest` 提示缺少 daed 包：确认所选 ImageBuilder 版本的官方仓库包含 `config/build-profile.json` 声明的完整包集。安全策略不允许临时回退到第三方 APK。
 
-`daed-packages` sha256 mismatch：feed 的 `manifest-daede.txt` 与下载文件不一致，中止构建；先确认 feed 域名未被篡改。
+`validate-imagebuilder` 失败：所选 ImageBuilder 缺少签名、TLS、manifest 或 CycloneDX SBOM 安全选项；不要绕过检查，应升级或修复上游构建来源。
+
+缺少 `.manifest` 或 `.bom.cdx.json`：ImageBuilder 没有为最终镜像生成必需的审计资产，工作流会在 OVA 发布前中止。
 
 `skip already converted`：当前镜像 SHA256 和 `BUILDER_VERSION` 已存在于 `manifests/converted-images.json`。如果转换逻辑或 Release tag 规则确实变了，先递增 `BUILDER_VERSION`。
 
-GitHub Release 已存在：`publish_releases.py` 会跳过已有 tag，适合重复运行。
+GitHub Release 已存在：`publish_releases.py` 会复验全部托管资产；完全一致时幂等通过并保留人工添加的非托管资产，不一致时拒绝覆盖。记录修复仍可安全重跑。
 
 Release 太多：发布脚本默认按 family 各保留最近 30 个自动 Release；如需调整，修改 workflow 中的 `--keep-releases` 参数。
 
@@ -201,4 +244,4 @@ Release 太多：发布脚本默认按 family 各保留最近 30 个自动 Relea
 
 保持仓库私有。不要提交固件镜像、运行时配置密钥、GitHub token、VPN 凭据、代理订阅或其他敏感配置。
 
-daed `.apk` 下载源会进入构建链路，修改 `config/daed-feed.json` 时需要确认来源可信，并在提交或 PR 描述中说明原因。`files/` 覆盖层仅包含通用旁路由调优，不注入任何凭据。
+ImageBuilder 版本和包列表会进入构建信任链，修改下载来源、校验逻辑、`config/build-profile.json` 或 GitHub Actions 固定 SHA 时必须进行安全审查。`files/` 覆盖层仅包含通用旁路由调优，不注入任何凭据。

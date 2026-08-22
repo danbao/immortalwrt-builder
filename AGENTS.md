@@ -2,15 +2,17 @@
 
 ## Project Structure & Module Organization
 
-This repository automates building ImmortalWrt 25.12.1 x86_64 images, converting them to ESXi-ready OVA files, and publishing release artifacts. Core automation lives in `scripts/`: `openwrt_build_preflight.py` resolves/downloads the ImageBuilder and fetches sha256-verified daed apk packages; `openwrt_img_to_ova.py` handles image discovery, conversion, release and asset metadata, checksums, and manifest recording; `publish_releases.py` creates GitHub Releases from conversion results. The GitHub Actions entrypoint is `.github/workflows/build-openwrt.yml`. The daed third-party package source is pinned in `config/daed-feed.json`. Generated release records are stored in `manifests/converted-images.json` and rendered to `docs/converted-images.md`. Build outputs such as `dist/`, `build-out/`, `imagebuilder/`, `*.ova`, and `*.vmdk` must stay out of git.
+This repository automates building ImmortalWrt 25.12.1 x86_64 images, converting them to ESXi-ready OVA files, and publishing release artifacts. Core automation lives in `scripts/`: `openwrt_build_preflight.py` resolves/downloads the ImageBuilder and validates the centralized build profile, ImageBuilder security options, and official package manifest; `openwrt_img_to_ova.py` handles image discovery, conversion, release assets, provenance metadata, checksums, and manifest recording; `publish_releases.py` validates and creates GitHub Releases from explicitly declared assets; `update_release_records.py` regenerates and pushes release records with bounded retries. The GitHub Actions entrypoint is `.github/workflows/build-openwrt.yml`, and the single build profile is `config/build-profile.json`. Generated release records are stored in `manifests/converted-images.json` and rendered to `docs/converted-images.md`. Build outputs such as `dist/`, `build-out/`, `imagebuilder/`, `*.ova`, and `*.vmdk` must stay out of git.
 
 ## Build, Test, and Development Commands
 
 - `sudo apt-get install -y qemu-utils`: installs `qemu-img`, required for local conversion.
-- `python3 scripts/openwrt_build_preflight.py daed-packages --config config/daed-feed.json --out-dir imagebuilder/packages --metadata-out dist/daed-packages.json`: downloads `daed` and `luci-app-daede` apk files from the kenzok8 daed feed with sha256 verification into the ImageBuilder local package dir.
+- `python3 scripts/openwrt_build_preflight.py validate-profile --config config/build-profile.json`: validates the centralized single build profile and prints workflow values.
+- `python3 scripts/openwrt_build_preflight.py validate-imagebuilder --profile config/build-profile.json --config imagebuilder/.config`: asserts the required signature, TLS, manifest, and CycloneDX SBOM options.
+- `python3 scripts/openwrt_build_preflight.py validate-manifest --profile config/build-profile.json --manifest build-out/official.packages.manifest --metadata-out build-out/official-packages.json`: validates the official daed package set and records versions.
 - `python3 scripts/openwrt_img_to_ova.py scan --img-dir <dir-with-img-files> --manifest manifests/converted-images.json --out-dir dist --results dist/build-results.json --nic-count 1`: converts unrecorded `.img` or `.img.gz` files into OVA artifacts. CI also passes `--release-date`, `--immortalwrt-version-code`, and `--immortalwrt-commit`.
 - `python3 scripts/openwrt_img_to_ova.py record --results dist/build-results.json --manifest manifests/converted-images.json --doc docs/converted-images.md`: records successfully published conversions.
-- `python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30`: publishes built OVA/checksum artifacts and prunes older managed releases; requires authenticated `gh`.
+- `python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30 --expected-repository-commit <commit> --expected-workflow-run-url <url>`: validates the release handoff against trusted run provenance, publishes all declared assets, and prunes older managed releases; requires authenticated `gh`.
 - `python3 -m py_compile scripts/*.py`: quick syntax check for script-only changes.
 - `python3 -m unittest discover -s tests`: runs the unit tests.
 
@@ -28,5 +30,4 @@ Recent history uses concise subjects such as `feat: bypass-router tuning ...` an
 
 ## Security & Configuration Tips
 
-Keep this repository private. Do not commit firmware images, runtime secrets, GitHub tokens, or injected OpenWrt configuration containing credentials. Treat third-party feed and package URL changes (`config/daed-feed.json`, feed domain, package list) as security-sensitive and document why the source is trusted. The kenzok8 daed feed is unsigned: never add it to the ImageBuilder `repositories`; only download individual apk files with sha256 verification from its `manifest-daede.txt`.
-
+Keep this repository private. Do not commit firmware images, runtime secrets, GitHub tokens, or injected OpenWrt configuration containing credentials. Official ImmortalWrt packages are mandatory; do not add unsigned third-party APK feeds or fallback download paths. Treat ImageBuilder URLs, checksums, `config/build-profile.json`, and pinned GitHub Action SHAs as security-sensitive changes. Build jobs remain read-only, and only the isolated GitHub-hosted publish job may receive `contents: write`.
