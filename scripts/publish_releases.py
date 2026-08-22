@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -63,15 +64,102 @@ def require_file(path: Path) -> None:
         raise RuntimeError(f"required release asset is empty: {path}")
 
 
-def release_asset_paths(item: dict[str, object]) -> list[Path]:
+def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def release_asset_paths(item: dict[str, object], asset_root: Path) -> list[Path]:
     values = item.get("release_assets")
     if not isinstance(values, list) or not values or not all(isinstance(value, str) and value for value in values):
         raise ValueError("built item release_assets must be a non-empty list of paths")
-    paths = [Path(value) for value in values]
+    trusted_root = asset_root.resolve()
+    paths = [Path(value).resolve() for value in values]
+    outside = [path for path in paths if not path.is_relative_to(trusted_root)]
+    if outside:
+        raise ValueError(f"release asset is outside trusted asset directory: {outside[0]}")
     names = [path.name for path in paths]
     if len(names) != len(set(names)):
         raise ValueError("built item release_assets contains duplicate asset names")
     return paths
+
+
+def parse_checksum_lines(path: Path) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+            raise ValueError(f"invalid checksum line {lineno} in {path.name}")
+        name = parts[1].lstrip("* ")
+        if not name or Path(name).name != name or name in checksums:
+            raise ValueError(f"invalid or duplicate checksum asset on line {lineno} in {path.name}")
+        checksums[name] = parts[0]
+    return checksums
+
+
+def validate_release_payload(item: dict[str, object], asset_root: Path) -> list[Path]:
+    assets = release_asset_paths(item, asset_root)
+    for path in assets:
+        require_file(path)
+    by_name = {path.name: path for path in assets}
+    tag = str(item.get("release_tag") or "")
+    if not is_managed_release_tag(tag):
+        raise ValueError(f"release tag is not a managed release tag: {tag!r}")
+    image_asset = str(item.get("image_asset") or "")
+    if not image_asset.endswith(".img.gz"):
+        raise ValueError(f"invalid image_asset: {image_asset!r}")
+    expected_tag = f"openwrt-{image_asset.removesuffix('.img.gz')}"
+    if tag != expected_tag:
+        raise ValueError(f"release tag does not match image asset: expected {expected_tag}, got {tag}")
+
+    artifact_name = image_asset.removesuffix(".img.gz")
+    expected_names = {
+        image_asset,
+        Path(str(item.get("ova_path") or "")).name,
+        Path(str(item.get("checksum_path") or "")).name,
+        f"{artifact_name}.manifest",
+        f"{artifact_name}.bom.cdx.json",
+        "build-metadata.json",
+        "build-metadata.tar.gz",
+        "SHA256SUMS",
+    }
+    if set(by_name) != expected_names:
+        missing = sorted(expected_names - set(by_name))
+        extra = sorted(set(by_name) - expected_names)
+        raise ValueError(f"release asset set mismatch; missing={missing}, extra={extra}")
+
+    image_sha = sha256_file(by_name[image_asset])
+    if image_sha != item.get("image_sha256"):
+        raise ValueError(f"raw image SHA256 mismatch: expected {item.get('image_sha256')}, got {image_sha}")
+    if not artifact_name.endswith(image_sha[:12]):
+        raise ValueError("raw image asset name does not contain its SHA256 prefix")
+
+    ova_name = Path(str(item["ova_path"])).name
+    ova_checksums = parse_checksum_lines(by_name[Path(str(item["checksum_path"])).name])
+    if ova_checksums != {ova_name: sha256_file(by_name[ova_name])}:
+        raise ValueError("OVA SHA256 mismatch")
+
+    sums = parse_checksum_lines(by_name["SHA256SUMS"])
+    checksum_assets = set(by_name) - {"SHA256SUMS"}
+    if set(sums) != checksum_assets:
+        raise ValueError("SHA256SUMS asset set mismatch")
+    for name in sorted(checksum_assets):
+        actual = sha256_file(by_name[name])
+        if sums[name] != actual:
+            raise ValueError(f"SHA256 mismatch for release asset {name}: expected {sums[name]}, got {actual}")
+
+    metadata = json.loads(by_name["build-metadata.json"].read_text(encoding="utf-8"))
+    if metadata != item.get("build_metadata"):
+        raise ValueError("build metadata file does not match build-results.json")
+    if metadata.get("source") != "official-immortalwrt":
+        raise ValueError("build metadata source must be official-immortalwrt")
+    required_daed = {"daed", "daed-geoip", "daed-geosite", "luci-app-daed", "luci-i18n-daed-zh-cn"}
+    if not required_daed <= set(metadata.get("packages", {})):
+        raise ValueError("build metadata is missing required official daed package versions")
+    return assets
 
 
 def verify_release_assets(tag: str, expected_names: set[str]) -> None:
@@ -123,11 +211,9 @@ def release_notes(item: dict[str, object]) -> str:
     return "\n".join(note_lines)
 
 
-def publish_item(item: dict[str, object]) -> bool:
+def publish_item(item: dict[str, object], asset_root: Path) -> bool:
     tag = item["release_tag"]
-    assets = release_asset_paths(item)
-    for path in assets:
-        require_file(path)
+    assets = validate_release_payload(item, asset_root)
     expected_names = {path.name for path in assets}
     notes = release_notes(item)
     if release_exists(tag):
@@ -221,7 +307,7 @@ def main(argv: list[str]) -> int:
         payload = json.loads(args.results.read_text(encoding="utf-8"))
         published_any = False
         for item in payload.get("built", []):
-            published_any = publish_item(item) or published_any
+            published_any = publish_item(item, args.results.parent) or published_any
         if published_any:
             cleanup_old_releases(args.keep_releases)
         else:

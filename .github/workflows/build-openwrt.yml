@@ -183,20 +183,12 @@ jobs:
             FILES="${GITHUB_WORKSPACE}/files" \
             ROOTFS_PARTSIZE="${ROOTFS_PARTSIZE}" \
             PACKAGES="${BUILD_PACKAGES}"
-          shopt -s nullglob
-          images=(bin/targets/x86/64/${IMAGE_GLOB})
-          if [ "${#images[@]}" -ne 1 ]; then
-            echo "Expected exactly one image matching ${IMAGE_GLOB}, found ${#images[@]}" >&2
-            printf '%s\n' "${images[@]}" >&2
-            exit 1
-          fi
-          image="${images[0]}"
-          image_base="${image%.img.gz}"
-          test -s "${image_base}.manifest"
-          test -s "${image_base}.bom.cdx.json"
-          cp "${image}" "${GITHUB_WORKSPACE}/build-out/immortalwrt-x86-64-daed.img.gz"
-          cp "${image_base}.manifest" "${GITHUB_WORKSPACE}/build-out/final-image.manifest"
-          cp "${image_base}.bom.cdx.json" "${GITHUB_WORKSPACE}/build-out/final-image.bom.cdx.json"
+          cd "${GITHUB_WORKSPACE}"
+          python3 scripts/openwrt_build_preflight.py collect-image-outputs \
+            --target-dir imagebuilder/bin/targets/x86/64 \
+            --image-glob "${IMAGE_GLOB}" \
+            --out-dir build-out
+          cd imagebuilder
           for info in config.buildinfo feeds.buildinfo version.buildinfo; do
             if [ -s "bin/targets/x86/64/${info}" ]; then
               cp "bin/targets/x86/64/${info}" "${GITHUB_WORKSPACE}/build-out/${info}"
@@ -328,37 +320,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mapfile -t release_tags < <(python3 -c 'import json; print("\n".join(item["release_tag"] for item in json.load(open("dist/build-results.json"))["built"]))')
-          for attempt in 1 2 3; do
-            git fetch origin "${TARGET_REF}"
-            record_dir="$(mktemp -d)"
-            git worktree add --detach "${record_dir}" FETCH_HEAD
-            mkdir -p "${record_dir}/dist"
-            cp dist/build-results.json "${record_dir}/dist/build-results.json"
-            (
-              cd "${record_dir}"
-              python3 scripts/openwrt_img_to_ova.py record \
-                --results dist/build-results.json \
-                --manifest manifests/converted-images.json \
-                --doc docs/converted-images.md
-              verify_args=()
-              for tag in "${release_tags[@]}"; do
-                verify_args+=(--release-tag "${tag}")
-              done
-              python3 scripts/openwrt_build_preflight.py verify-records \
-                --manifest manifests/converted-images.json \
-                --doc docs/converted-images.md \
-                "${verify_args[@]}" \
-                --check-latest-release
-              git add manifests/converted-images.json docs/converted-images.md
-              if git diff --cached --quiet; then
-                exit 0
-              fi
-              git commit -m "docs: record converted OpenWrt images [skip ci]"
-              git push origin "HEAD:${TARGET_REF}"
-            ) && exit 0
-            git worktree remove --force "${record_dir}"
-            echo "Record push failed on attempt ${attempt}/3" >&2
-          done
-          echo "Release exists, but repository records could not be pushed after 3 attempts" >&2
-          exit 1
+          python3 scripts/update_release_records.py \
+            --results dist/build-results.json \
+            --target-ref "${TARGET_REF}" \
+            --attempts 3

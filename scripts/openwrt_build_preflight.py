@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.error
@@ -109,6 +110,33 @@ def validate_package_manifest(payload: str, profile: dict) -> dict[str, str]:
     if forbidden:
         raise ValueError(f"package manifest contains forbidden package(s): {', '.join(forbidden)}")
     return packages
+
+
+def collect_image_outputs(target_dir: Path, image_glob: str, out_dir: Path) -> dict[str, Path]:
+    images = sorted(path for path in target_dir.glob(image_glob) if path.is_file())
+    if len(images) != 1:
+        raise ValueError(f"expected exactly one image matching {image_glob}, found {len(images)}")
+    image = images[0]
+    if not image.name.endswith(".img.gz"):
+        raise ValueError(f"selected image does not end with .img.gz: {image}")
+    image_base = image.with_name(image.name.removesuffix(".img.gz"))
+    manifest = Path(f"{image_base}.manifest")
+    sbom = Path(f"{image_base}.bom.cdx.json")
+    for path, label in ((manifest, "manifest"), (sbom, "SBOM")):
+        if not path.is_file():
+            raise FileNotFoundError(f"required final image {label} is missing: {path}")
+        if path.stat().st_size == 0:
+            raise RuntimeError(f"required final image {label} is empty: {path}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outputs = {
+        "image": out_dir / "immortalwrt-x86-64-daed.img.gz",
+        "manifest": out_dir / "final-image.manifest",
+        "sbom": out_dir / "final-image.bom.cdx.json",
+    }
+    shutil.copy2(image, outputs["image"])
+    shutil.copy2(manifest, outputs["manifest"])
+    shutil.copy2(sbom, outputs["sbom"])
+    return outputs
 
 
 def request_headers() -> dict[str, str]:
@@ -274,6 +302,13 @@ def cmd_validate_manifest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_collect_image_outputs(args: argparse.Namespace) -> int:
+    outputs = collect_image_outputs(args.target_dir, args.image_glob, args.out_dir)
+    for name, path in outputs.items():
+        print(f"{name}={path}")
+    return 0
+
+
 def cmd_verify_records(args: argparse.Namespace) -> int:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     doc_text = args.doc.read_text(encoding="utf-8")
@@ -340,6 +375,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate_manifest.add_argument("--manifest", type=Path, required=True)
     validate_manifest.add_argument("--metadata-out", type=Path, required=True)
     validate_manifest.set_defaults(func=cmd_validate_manifest)
+
+    collect_outputs = subparsers.add_parser(
+        "collect-image-outputs", help="select exactly one image and copy its required audit sidecars"
+    )
+    collect_outputs.add_argument("--target-dir", type=Path, required=True)
+    collect_outputs.add_argument("--image-glob", required=True)
+    collect_outputs.add_argument("--out-dir", type=Path, required=True)
+    collect_outputs.set_defaults(func=cmd_collect_image_outputs)
 
     verify_records = subparsers.add_parser("verify-records", help="verify manifest/docs contain expected release tags")
     verify_records.add_argument("--manifest", type=Path, required=True)

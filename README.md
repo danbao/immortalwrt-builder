@@ -79,8 +79,8 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 6. `validate` 模式到此结束；其他模式执行 `make image`，并强制要求恰好一个 raw image、一个最终 manifest 和一个 CycloneDX SBOM。
 7. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，再由 `prepare-assets` 生成统一校验和、供应链元数据和确定性 buildinfo 归档。
 8. `dry-run` 只上传临时 Artifact；`publish` 将一日有效的交接 Artifact 传给 GitHub 托管发布 job。
-9. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 幂等创建或更新 Release，并验证资产完整性。
-10. 发布成功后确定性重建 `manifests/converted-images.json` 和 `docs/converted-images.md`；遇到并发 push 冲突会拉取最新目标分支并最多重试三次。Release 不会因记录提交失败而回滚。
+9. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 幂等创建或更新 Release；发布端重新限制 tag 和资产路径，并逐项复验 `.ova.sha256` 与 `SHA256SUMS`，不直接信任构建 runner 的交接声明。
+10. 发布成功后由 `scripts/update_release_records.py` 确定性重建 `manifests/converted-images.json` 和 `docs/converted-images.md`；遇到并发 push 冲突会拉取最新目标分支并最多重试三次。Release 不会因记录提交失败而回滚。
 
 转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。定时 workflow 只代表定期检查和构建，镜像 SHA 未变化时不会发布新 Release。Release 清理按 daed family 保留最近 30 个；历史 standard family 也继续按最近 30 个修剪。
 

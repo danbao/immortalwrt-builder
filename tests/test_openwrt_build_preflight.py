@@ -112,6 +112,32 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected one sha256 entry"):
             preflight.parse_sha256sums("", filename)
 
+    def test_collect_image_outputs_requires_one_image_and_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            target = tmp / "target"
+            output = tmp / "out"
+            target.mkdir()
+            with self.assertRaisesRegex(ValueError, "exactly one image"):
+                preflight.collect_image_outputs(target, "*.img.gz", output)
+
+            first = target / "first.img.gz"
+            second = target / "second.img.gz"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            with self.assertRaisesRegex(ValueError, "found 2"):
+                preflight.collect_image_outputs(target, "*.img.gz", output)
+
+            second.unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "manifest"):
+                preflight.collect_image_outputs(target, "*.img.gz", output)
+
+            (target / "first.manifest").write_text("daed - 1\n", encoding="utf-8")
+            (target / "first.bom.cdx.json").write_text("{}\n", encoding="utf-8")
+            collected = preflight.collect_image_outputs(target, "*.img.gz", output)
+            self.assertEqual(collected["image"], output / "immortalwrt-x86-64-daed.img.gz")
+            self.assertEqual((output / "final-image.manifest").read_text(encoding="utf-8"), "daed - 1\n")
+
 
 if __name__ == "__main__":
     unittest.main()
