@@ -311,7 +311,11 @@ jobs:
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
+        run: |
+          python3 scripts/publish_releases.py dist/build-results.json \
+            --keep-releases 30 \
+            --expected-repository-commit "${GITHUB_SHA}" \
+            --expected-workflow-run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
       - name: Record release with conflict retries
         env:

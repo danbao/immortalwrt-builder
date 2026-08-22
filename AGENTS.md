@@ -12,7 +12,7 @@ This repository automates building ImmortalWrt 25.12.1 x86_64 images, converting
 - `python3 scripts/openwrt_build_preflight.py validate-manifest --profile config/build-profile.json --manifest build-out/official.packages.manifest --metadata-out build-out/official-packages.json`: validates the official daed package set and records versions.
 - `python3 scripts/openwrt_img_to_ova.py scan --img-dir <dir-with-img-files> --manifest manifests/converted-images.json --out-dir dist --results dist/build-results.json --nic-count 1`: converts unrecorded `.img` or `.img.gz` files into OVA artifacts. CI also passes `--release-date`, `--immortalwrt-version-code`, and `--immortalwrt-commit`.
 - `python3 scripts/openwrt_img_to_ova.py record --results dist/build-results.json --manifest manifests/converted-images.json --doc docs/converted-images.md`: records successfully published conversions.
-- `python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30`: publishes built OVA/checksum artifacts and prunes older managed releases; requires authenticated `gh`.
+- `python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30 --expected-repository-commit <commit> --expected-workflow-run-url <url>`: validates the release handoff against trusted run provenance, publishes all declared assets, and prunes older managed releases; requires authenticated `gh`.
 - `python3 -m py_compile scripts/*.py`: quick syntax check for script-only changes.
 - `python3 -m unittest discover -s tests`: runs the unit tests.
 

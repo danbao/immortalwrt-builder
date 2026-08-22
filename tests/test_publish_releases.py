@@ -40,7 +40,10 @@ class PublishReleasesTests(unittest.TestCase):
                 "luci-app-daed": "1.1.0-r2",
                 "luci-i18n-daed-zh-cn": "1.1.0-r2",
             },
-            "provenance": {"workflow_run_url": "https://github.com/example/actions/runs/1"},
+            "provenance": {
+                "repository_commit": "deadbeef",
+                "workflow_run_url": "https://github.com/example/actions/runs/1",
+            },
         }
         (root / "build-metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
         ova = root / names[1]
@@ -161,7 +164,12 @@ class PublishReleasesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_s:
             root = Path(tmp_s)
             item = self.make_release_item(root)
-            publish_releases.validate_release_payload(item, root)
+            publish_releases.validate_release_payload(
+                item,
+                root,
+                expected_repository_commit="deadbeef",
+                expected_workflow_run_url="https://github.com/example/actions/runs/1",
+            )
             (root / "build-metadata.tar.gz").write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
                 publish_releases.validate_release_payload(item, root)
@@ -170,6 +178,15 @@ class PublishReleasesTests(unittest.TestCase):
             item["release_tag"] = "manual-release"
             with self.assertRaisesRegex(ValueError, "managed release tag"):
                 publish_releases.validate_release_payload(item, root)
+
+            item = self.make_release_item(root)
+            with self.assertRaisesRegex(ValueError, "repository_commit"):
+                publish_releases.validate_release_payload(
+                    item,
+                    root,
+                    expected_repository_commit="trusted-commit",
+                    expected_workflow_run_url="https://github.com/example/actions/runs/1",
+                )
 
 
 if __name__ == "__main__":

@@ -100,7 +100,13 @@ def parse_checksum_lines(path: Path) -> dict[str, str]:
     return checksums
 
 
-def validate_release_payload(item: dict[str, object], asset_root: Path) -> list[Path]:
+def validate_release_payload(
+    item: dict[str, object],
+    asset_root: Path,
+    *,
+    expected_repository_commit: str | None = None,
+    expected_workflow_run_url: str | None = None,
+) -> list[Path]:
     assets = release_asset_paths(item, asset_root)
     for path in assets:
         require_file(path)
@@ -116,10 +122,18 @@ def validate_release_payload(item: dict[str, object], asset_root: Path) -> list[
         raise ValueError(f"release tag does not match image asset: expected {expected_tag}, got {tag}")
 
     artifact_name = image_asset.removesuffix(".img.gz")
+    family_prefix = "immortalwrt-x86-64-daed" if artifact_name.startswith("immortalwrt-x86-64-daed-") else "immortalwrt-x86-64"
+    artifact_suffix = artifact_name.removeprefix(f"{family_prefix}-")
+    expected_ova_name = f"{family_prefix}-esxi-{artifact_suffix}.ova"
+    expected_ova_checksum_name = f"{expected_ova_name}.sha256"
+    if Path(str(item.get("ova_path") or "")).name != expected_ova_name:
+        raise ValueError(f"OVA asset name mismatch: expected {expected_ova_name}")
+    if Path(str(item.get("checksum_path") or "")).name != expected_ova_checksum_name:
+        raise ValueError(f"OVA checksum asset name mismatch: expected {expected_ova_checksum_name}")
     expected_names = {
         image_asset,
-        Path(str(item.get("ova_path") or "")).name,
-        Path(str(item.get("checksum_path") or "")).name,
+        expected_ova_name,
+        expected_ova_checksum_name,
         f"{artifact_name}.manifest",
         f"{artifact_name}.bom.cdx.json",
         "build-metadata.json",
@@ -159,6 +173,13 @@ def validate_release_payload(item: dict[str, object], asset_root: Path) -> list[
     required_daed = {"daed", "daed-geoip", "daed-geosite", "luci-app-daed", "luci-i18n-daed-zh-cn"}
     if not required_daed <= set(metadata.get("packages", {})):
         raise ValueError("build metadata is missing required official daed package versions")
+    provenance = metadata.get("provenance", {})
+    for field, expected in (
+        ("repository_commit", expected_repository_commit),
+        ("workflow_run_url", expected_workflow_run_url),
+    ):
+        if expected is not None and provenance.get(field) != expected:
+            raise ValueError(f"build metadata {field} does not match trusted publish context")
     return assets
 
 
@@ -211,9 +232,20 @@ def release_notes(item: dict[str, object]) -> str:
     return "\n".join(note_lines)
 
 
-def publish_item(item: dict[str, object], asset_root: Path) -> bool:
+def publish_item(
+    item: dict[str, object],
+    asset_root: Path,
+    *,
+    expected_repository_commit: str | None = None,
+    expected_workflow_run_url: str | None = None,
+) -> bool:
     tag = item["release_tag"]
-    assets = validate_release_payload(item, asset_root)
+    assets = validate_release_payload(
+        item,
+        asset_root,
+        expected_repository_commit=expected_repository_commit,
+        expected_workflow_run_url=expected_workflow_run_url,
+    )
     expected_names = {path.name for path in assets}
     notes = release_notes(item)
     if release_exists(tag):
@@ -296,6 +328,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path)
     parser.add_argument("--keep-releases", type=int, default=30, help="number of managed releases to keep")
+    parser.add_argument("--expected-repository-commit", required=True)
+    parser.add_argument("--expected-workflow-run-url", required=True)
     return parser.parse_args(argv)
 
 
@@ -307,7 +341,15 @@ def main(argv: list[str]) -> int:
         payload = json.loads(args.results.read_text(encoding="utf-8"))
         published_any = False
         for item in payload.get("built", []):
-            published_any = publish_item(item, args.results.parent) or published_any
+            published_any = (
+                publish_item(
+                    item,
+                    args.results.parent,
+                    expected_repository_commit=args.expected_repository_commit,
+                    expected_workflow_run_url=args.expected_workflow_run_url,
+                )
+                or published_any
+            )
         if published_any:
             cleanup_old_releases(args.keep_releases)
         else:

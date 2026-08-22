@@ -191,7 +191,10 @@ python3 scripts/openwrt_img_to_ova.py prepare-assets \
   --repository-commit <repository-commit> \
   --workflow-run-url <workflow-run-url> \
   --runner-type local
-python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30
+python3 scripts/publish_releases.py dist/build-results.json \
+  --keep-releases 30 \
+  --expected-repository-commit <repository-commit> \
+  --expected-workflow-run-url <workflow-run-url>
 ```
 
 脚本只创建不存在的 Release tag；如果 tag 已存在，会更新标题、说明和资产。成功发布新 Release 后，脚本会按 family 分别保留最近 30 个自动发布的 OpenWrt Release，并删除更旧的自动 Release 及其 tag。手工创建且不匹配本项目自动 tag 格式的 Release 不会被清理。
