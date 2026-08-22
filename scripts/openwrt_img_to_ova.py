@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import os
 import re
@@ -17,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "9"
+BUILDER_VERSION = "10"
 
 
 @dataclass(frozen=True)
@@ -244,6 +246,131 @@ def write_ova(ova: Path, files: list[Path]) -> None:
             tar.add(path, arcname=path.name)
 
 
+def require_nonempty_file(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"required {label} file is missing: {path}")
+    if path.stat().st_size == 0:
+        raise RuntimeError(f"required {label} file is empty: {path}")
+
+
+def write_deterministic_tar_gz(output: Path, files: list[Path]) -> None:
+    names = [path.name for path in files]
+    if len(names) != len(set(names)):
+        raise ValueError("build metadata files must have unique basenames")
+    with output.open("wb") as raw_handle:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_handle, mtime=0) as gzip_handle:
+            with tarfile.open(fileobj=gzip_handle, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                for path in sorted(files, key=lambda candidate: candidate.name):
+                    require_nonempty_file(path, "build metadata")
+                    data = path.read_bytes()
+                    info = tarfile.TarInfo(path.name)
+                    info.size = len(data)
+                    info.mode = 0o644
+                    info.mtime = 0
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = ""
+                    info.gname = ""
+                    archive.addfile(info, io.BytesIO(data))
+
+
+def resolve_source_image(path_value: str, source_dir: Path) -> Path:
+    path = Path(path_value)
+    candidates = [path]
+    if not path.is_absolute():
+        candidates.append(source_dir / path.name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"built image is missing: {path_value}")
+
+
+def prepare_release_assets(
+    *,
+    results_path: Path,
+    source_dir: Path,
+    out_dir: Path,
+    profile_path: Path,
+    package_manifest: Path,
+    sbom: Path,
+    package_metadata: Path,
+    build_info_files: list[Path],
+    provenance: dict[str, str],
+) -> None:
+    require_nonempty_file(sbom, "SBOM")
+    require_nonempty_file(package_manifest, "package manifest")
+    require_nonempty_file(package_metadata, "package metadata")
+    require_nonempty_file(profile_path, "build profile")
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    built = payload.get("built", [])
+    if not built:
+        print("no built image; skip release asset preparation")
+        return
+    if len(built) != 1:
+        raise ValueError(f"expected exactly one built image, found {len(built)}")
+
+    item = built[0]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    image_asset = str(item.get("image_asset") or "")
+    if not image_asset.endswith(".img.gz"):
+        raise ValueError(f"invalid raw image asset name: {image_asset!r}")
+    artifact_name = image_asset.removesuffix(".img.gz")
+    image_target = out_dir / image_asset
+    shutil.copy2(resolve_source_image(str(item["image_path"]), source_dir), image_target)
+    manifest_target = out_dir / f"{artifact_name}.manifest"
+    sbom_target = out_dir / f"{artifact_name}.bom.cdx.json"
+    shutil.copy2(package_manifest, manifest_target)
+    shutil.copy2(sbom, sbom_target)
+
+    ova = Path(item["ova_path"])
+    ova_checksum = Path(item["checksum_path"])
+    for path, label in (
+        (image_target, "raw image"),
+        (ova, "OVA"),
+        (ova_checksum, "OVA checksum"),
+        (manifest_target, "package manifest"),
+        (sbom_target, "SBOM"),
+    ):
+        require_nonempty_file(path, label)
+
+    metadata_archive = out_dir / "build-metadata.tar.gz"
+    write_deterministic_tar_gz(
+        metadata_archive,
+        [profile_path, package_manifest, package_metadata, *build_info_files],
+    )
+    package_payload = json.loads(package_metadata.read_text(encoding="utf-8"))
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    checksum_inputs = [image_target, ova, ova_checksum, manifest_target, sbom_target, metadata_archive]
+    metadata = {
+        "schema_version": 1,
+        "source": "official-immortalwrt",
+        "profile": {
+            "name": profile["name"],
+            "imagebuilder_profile": profile["profile"],
+            "rootfs_partsize": profile["rootfs_partsize"],
+            "nic_count": profile["nic_count"],
+        },
+        "packages": package_payload.get("packages", {}),
+        "provenance": provenance,
+        "asset_sha256": {path.name: sha256_file(path) for path in checksum_inputs},
+    }
+    metadata_path = out_dir / "build-metadata.json"
+    write_json(metadata_path, metadata)
+
+    checksum_inputs.append(metadata_path)
+    sums_path = out_dir / "SHA256SUMS"
+    sums_path.write_text(
+        "".join(f"{sha256_file(path)}  {path.name}\n" for path in sorted(checksum_inputs, key=lambda candidate: candidate.name)),
+        encoding="utf-8",
+    )
+    release_assets = [*checksum_inputs, sums_path]
+    item["image_asset_path"] = image_target.as_posix()
+    item["release_assets"] = [path.as_posix() for path in release_assets]
+    item["build_metadata"] = metadata
+    write_json(results_path, payload)
+    print(f"prepared {len(release_assets)} release assets")
+
+
 def build_image(
     image: Path,
     out_dir: Path,
@@ -404,6 +531,31 @@ def cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prepare_assets(args: argparse.Namespace) -> int:
+    provenance = {
+        "imagebuilder_version": args.imagebuilder_version,
+        "imagebuilder_url": args.imagebuilder_url,
+        "imagebuilder_sha256": args.imagebuilder_sha256,
+        "immortalwrt_version_code": args.immortalwrt_version_code,
+        "immortalwrt_commit": args.immortalwrt_commit,
+        "repository_commit": args.repository_commit,
+        "workflow_run_url": args.workflow_run_url,
+        "runner_type": args.runner_type,
+    }
+    prepare_release_assets(
+        results_path=args.results,
+        source_dir=args.source_dir,
+        out_dir=args.out_dir,
+        profile_path=args.profile,
+        package_manifest=args.package_manifest,
+        sbom=args.sbom,
+        package_metadata=args.package_metadata,
+        build_info_files=args.build_info_file or [],
+        provenance=provenance,
+    )
+    return 0
+
+
 def write_converted_doc(path: Path, manifest: dict) -> None:
     rows = []
     conversions = manifest.get("conversions", {})
@@ -453,6 +605,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     record.add_argument("--manifest", type=Path, default=Path("manifests/converted-images.json"))
     record.add_argument("--doc", type=Path, default=Path("docs/converted-images.md"))
     record.set_defaults(func=cmd_record)
+
+    prepare_assets = subparsers.add_parser("prepare-assets", help="prepare auditable release assets")
+    prepare_assets.add_argument("--results", type=Path, required=True)
+    prepare_assets.add_argument("--source-dir", type=Path, required=True)
+    prepare_assets.add_argument("--out-dir", type=Path, required=True)
+    prepare_assets.add_argument("--profile", type=Path, required=True)
+    prepare_assets.add_argument("--package-manifest", type=Path, required=True)
+    prepare_assets.add_argument("--sbom", type=Path, required=True)
+    prepare_assets.add_argument("--package-metadata", type=Path, required=True)
+    prepare_assets.add_argument("--build-info-file", type=Path, action="append")
+    prepare_assets.add_argument("--imagebuilder-version", required=True)
+    prepare_assets.add_argument("--imagebuilder-url", required=True)
+    prepare_assets.add_argument("--imagebuilder-sha256", required=True)
+    prepare_assets.add_argument("--immortalwrt-version-code", required=True)
+    prepare_assets.add_argument("--immortalwrt-commit", required=True)
+    prepare_assets.add_argument("--repository-commit", required=True)
+    prepare_assets.add_argument("--workflow-run-url", required=True)
+    prepare_assets.add_argument("--runner-type", required=True)
+    prepare_assets.set_defaults(func=cmd_prepare_assets)
 
     return parser.parse_args(argv)
 

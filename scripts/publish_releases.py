@@ -14,7 +14,10 @@ RELEASE_TAG_FAMILY_PATTERNS = (
     ("daed", re.compile(r"^openwrt-immortalwrt-x86-64-daed-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
     ("standard", re.compile(r"^openwrt-immortalwrt-x86-64-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
 )
-ASSET_NAME_PATTERN = re.compile(r"^immortalwrt-x86-64.*(\.img\.gz|\.ova|\.ova\.sha256)$")
+ASSET_NAME_PATTERN = re.compile(
+    r"^(?:immortalwrt-x86-64.*(?:\.img\.gz|\.ova|\.ova\.sha256|\.manifest|\.bom\.cdx\.json)|"
+    r"SHA256SUMS|build-metadata\.json|build-metadata\.tar\.gz)$"
+)
 
 
 def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -60,12 +63,15 @@ def require_file(path: Path) -> None:
         raise RuntimeError(f"required release asset is empty: {path}")
 
 
-def expected_asset_paths(item: dict[str, str]) -> tuple[Path, Path, Path]:
-    ova = Path(item["ova_path"])
-    checksum = Path(item["checksum_path"])
-    image_asset = item.get("image_asset") or Path(item["image_path"]).name
-    image = Path(item.get("image_asset_path") or ova.with_name(image_asset))
-    return ova, checksum, image
+def release_asset_paths(item: dict[str, object]) -> list[Path]:
+    values = item.get("release_assets")
+    if not isinstance(values, list) or not values or not all(isinstance(value, str) and value for value in values):
+        raise ValueError("built item release_assets must be a non-empty list of paths")
+    paths = [Path(value) for value in values]
+    names = [path.name for path in paths]
+    if len(names) != len(set(names)):
+        raise ValueError("built item release_assets contains duplicate asset names")
+    return paths
 
 
 def verify_release_assets(tag: str, expected_names: set[str]) -> None:
@@ -86,32 +92,49 @@ def delete_stale_assets(tag: str, keep_assets: set[str]) -> None:
         print(f"deleted stale asset: {name}")
 
 
-def publish_item(item: dict[str, str]) -> bool:
-    tag = item["release_tag"]
-    ova, checksum, image = expected_asset_paths(item)
-    image_asset = item.get("image_asset") or Path(item["image_path"]).name
-    for path in (ova, checksum, image):
-        require_file(path)
-    expected_names = {ova.name, checksum.name, image.name}
-    if image.name != image_asset:
-        raise ValueError(f"raw image asset name mismatch: expected {image_asset}, got {image.name}")
+def release_notes(item: dict[str, object]) -> str:
+    metadata = item.get("build_metadata") or {}
+    profile = metadata.get("profile", {}) if isinstance(metadata, dict) else {}
+    packages = metadata.get("packages", {}) if isinstance(metadata, dict) else {}
+    provenance = metadata.get("provenance", {}) if isinstance(metadata, dict) else {}
     note_lines = [
-        f"Image: `{image_asset}`",
         f"Image SHA256: `{item['image_sha256']}`",
         f"Builder version: `{item['builder_version']}`",
+        f"Package source: `{metadata.get('source', 'unknown')}`",
     ]
+    for package, version in sorted(packages.items()):
+        note_lines.append(f"{package}: `{version}`")
+    if profile:
+        note_lines.append(
+            "Profile: `{profile}`, rootfs: `{rootfs}` MiB, NICs: `{nics}`".format(
+                profile=profile.get("imagebuilder_profile", "unknown"),
+                rootfs=profile.get("rootfs_partsize", "unknown"),
+                nics=profile.get("nic_count", "unknown"),
+            )
+        )
     if item.get("release_date"):
         note_lines.insert(0, f"Build date: `{item['release_date']}`")
     if item.get("immortalwrt_version_code"):
-        note_lines.insert(1, f"ImmortalWrt version: `{item['immortalwrt_version_code']}`")
+        note_lines.append(f"ImmortalWrt version: `{item['immortalwrt_version_code']}`")
     if item.get("immortalwrt_commit"):
-        note_lines.insert(2, f"ImmortalWrt commit: `{item['immortalwrt_commit']}`")
-    notes = "\n".join(note_lines)
+        note_lines.append(f"ImmortalWrt commit: `{item['immortalwrt_commit']}`")
+    if provenance.get("workflow_run_url"):
+        note_lines.append(f"Workflow run: {provenance['workflow_run_url']}")
+    return "\n".join(note_lines)
+
+
+def publish_item(item: dict[str, object]) -> bool:
+    tag = item["release_tag"]
+    assets = release_asset_paths(item)
+    for path in assets:
+        require_file(path)
+    expected_names = {path.name for path in assets}
+    notes = release_notes(item)
     if release_exists(tag):
         result = run(["gh", "release", "edit", tag, "--title", item["release_title"], "--notes", notes], check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip())
-        result = run(["gh", "release", "upload", tag, str(ova), str(checksum), str(image), "--clobber"], check=False)
+        result = run(["gh", "release", "upload", str(tag), *(str(path) for path in assets), "--clobber"], check=False)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip())
         delete_stale_assets(tag, expected_names)
@@ -123,10 +146,8 @@ def publish_item(item: dict[str, str]) -> bool:
         "gh",
         "release",
         "create",
-        tag,
-        str(ova),
-        str(checksum),
-        str(image),
+        str(tag),
+        *(str(path) for path in assets),
         "--title",
         item["release_title"],
         "--notes",
