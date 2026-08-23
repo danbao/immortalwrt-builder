@@ -121,7 +121,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exactly one image"):
                 preflight.collect_image_outputs(target, "*.img.gz", output)
 
-            first = target / "first.img.gz"
+            first = target / "immortalwrt-25.12.1-x86-64-generic-squashfs-combined-efi.img.gz"
             second = target / "second.img.gz"
             first.write_bytes(b"first")
             second.write_bytes(b"second")
@@ -132,8 +132,25 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "manifest"):
                 preflight.collect_image_outputs(target, "*.img.gz", output)
 
-            (target / "first.manifest").write_text("daed - 1\n", encoding="utf-8")
-            (target / "first.bom.cdx.json").write_text("{}\n", encoding="utf-8")
+            (target / "immortalwrt-25.12.1-x86-64-generic.manifest").write_text(
+                "daed - 1\n", encoding="utf-8"
+            )
+            (target / "immortalwrt-25.12.1-x86-64-generic.bom.cdx.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+
+            duplicate_manifest = target / "duplicate.manifest"
+            duplicate_manifest.write_text("other - 1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly one final image manifest"):
+                preflight.collect_image_outputs(target, "*.img.gz", output)
+            duplicate_manifest.unlink()
+
+            duplicate_sbom = target / "duplicate.bom.cdx.json"
+            duplicate_sbom.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly one final image SBOM"):
+                preflight.collect_image_outputs(target, "*.img.gz", output)
+            duplicate_sbom.unlink()
+
             collected = preflight.collect_image_outputs(target, "*.img.gz", output)
             self.assertEqual(collected["image"], output / "immortalwrt-x86-64-daed.img.gz")
             self.assertEqual((output / "final-image.manifest").read_text(encoding="utf-8"), "daed - 1\n")

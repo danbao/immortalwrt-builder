@@ -112,6 +112,20 @@ def validate_package_manifest(payload: str, profile: dict) -> dict[str, str]:
     return packages
 
 
+def require_single_output(target_dir: Path, pattern: str, label: str) -> Path:
+    candidates = sorted(path for path in target_dir.glob(pattern) if path.is_file())
+    if not candidates:
+        raise FileNotFoundError(f"required final image {label} is missing in {target_dir}")
+    if len(candidates) != 1:
+        raise ValueError(
+            f"expected exactly one final image {label} matching {pattern}, found {len(candidates)}"
+        )
+    output = candidates[0]
+    if output.stat().st_size == 0:
+        raise RuntimeError(f"required final image {label} is empty: {output}")
+    return output
+
+
 def collect_image_outputs(target_dir: Path, image_glob: str, out_dir: Path) -> dict[str, Path]:
     images = sorted(path for path in target_dir.glob(image_glob) if path.is_file())
     if len(images) != 1:
@@ -119,14 +133,8 @@ def collect_image_outputs(target_dir: Path, image_glob: str, out_dir: Path) -> d
     image = images[0]
     if not image.name.endswith(".img.gz"):
         raise ValueError(f"selected image does not end with .img.gz: {image}")
-    image_base = image.with_name(image.name.removesuffix(".img.gz"))
-    manifest = Path(f"{image_base}.manifest")
-    sbom = Path(f"{image_base}.bom.cdx.json")
-    for path, label in ((manifest, "manifest"), (sbom, "SBOM")):
-        if not path.is_file():
-            raise FileNotFoundError(f"required final image {label} is missing: {path}")
-        if path.stat().st_size == 0:
-            raise RuntimeError(f"required final image {label} is empty: {path}")
+    manifest = require_single_output(target_dir, "*.manifest", "manifest")
+    sbom = require_single_output(target_dir, "*.bom.cdx.json", "SBOM")
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs = {
         "image": out_dir / "immortalwrt-x86-64-daed.img.gz",
