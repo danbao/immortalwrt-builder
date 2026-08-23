@@ -1,5 +1,5 @@
 {
-  "builder_version": "9",
+  "builder_version": "10",
   "conversions": {
     "03b7fe49144808198e82e830825a41239a49737e776913b9b16cffe94861f9dd:3": {
       "builder_version": "3",
@@ -223,6 +223,18 @@
       "ova_asset": "immortalwrt-x86-64-esxi-20260625-cf234f8de6d5-6e4314f522b5.ova",
       "release_date": "20260625",
       "release_tag": "openwrt-immortalwrt-x86-64-20260625-cf234f8de6d5-6e4314f522b5"
+    },
+    "74e2a4ea2ee86487d1a34c629df0a7b994204177ec29c09927718f4ffec545c6:10": {
+      "builder_version": "10",
+      "checksum_asset": "immortalwrt-x86-64-daed-esxi-20260824-cd0a06bfd3fd-74e2a4ea2ee8.ova.sha256",
+      "image_asset": "immortalwrt-x86-64-daed-20260824-cd0a06bfd3fd-74e2a4ea2ee8.img.gz",
+      "image_path": "build-out/immortalwrt-x86-64-daed.img.gz",
+      "image_sha256": "74e2a4ea2ee86487d1a34c629df0a7b994204177ec29c09927718f4ffec545c6",
+      "immortalwrt_commit": "cd0a06bfd3fd",
+      "immortalwrt_version_code": "r37978-cd0a06bfd3fd",
+      "ova_asset": "immortalwrt-x86-64-daed-esxi-20260824-cd0a06bfd3fd-74e2a4ea2ee8.ova",
+      "release_date": "20260824",
+      "release_tag": "openwrt-immortalwrt-x86-64-daed-20260824-cd0a06bfd3fd-74e2a4ea2ee8"
     },
     "7540130eed7b3d226f6443be5d635c81a648384274195fa2e6907bd074f77e71:7": {
       "builder_version": "7",
