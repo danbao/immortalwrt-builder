@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "10"
+BUILDER_VERSION = "11"
 
 
 @dataclass(frozen=True)
@@ -294,6 +294,7 @@ def prepare_release_assets(
     package_manifest: Path,
     sbom: Path,
     package_metadata: Path,
+    setup_wizard: Path,
     build_info_files: list[Path],
     provenance: dict[str, str],
 ) -> None:
@@ -301,6 +302,7 @@ def prepare_release_assets(
     require_nonempty_file(package_manifest, "package manifest")
     require_nonempty_file(package_metadata, "package metadata")
     require_nonempty_file(profile_path, "build profile")
+    require_nonempty_file(setup_wizard, "setup wizard")
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     built = payload.get("built", [])
     if not built:
@@ -321,6 +323,9 @@ def prepare_release_assets(
     sbom_target = out_dir / f"{artifact_name}.bom.cdx.json"
     shutil.copy2(package_manifest, manifest_target)
     shutil.copy2(sbom, sbom_target)
+    setup_wizard_target = out_dir / "setup-openwrt.sh"
+    shutil.copy2(setup_wizard, setup_wizard_target)
+    setup_wizard_target.chmod(0o755)
 
     ova = Path(item["ova_path"])
     ova_checksum = Path(item["checksum_path"])
@@ -330,6 +335,7 @@ def prepare_release_assets(
         (ova_checksum, "OVA checksum"),
         (manifest_target, "package manifest"),
         (sbom_target, "SBOM"),
+        (setup_wizard_target, "setup wizard"),
     ):
         require_nonempty_file(path, label)
 
@@ -340,7 +346,15 @@ def prepare_release_assets(
     )
     package_payload = json.loads(package_metadata.read_text(encoding="utf-8"))
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
-    checksum_inputs = [image_target, ova, ova_checksum, manifest_target, sbom_target, metadata_archive]
+    checksum_inputs = [
+        image_target,
+        ova,
+        ova_checksum,
+        manifest_target,
+        sbom_target,
+        setup_wizard_target,
+        metadata_archive,
+    ]
     metadata = {
         "schema_version": 1,
         "source": "official-immortalwrt",
@@ -349,6 +363,7 @@ def prepare_release_assets(
             "imagebuilder_profile": profile["profile"],
             "rootfs_partsize": profile["rootfs_partsize"],
             "nic_count": profile["nic_count"],
+            "required_packages": profile["required_packages"],
         },
         "packages": package_payload.get("packages", {}),
         "provenance": provenance,
@@ -550,6 +565,7 @@ def cmd_prepare_assets(args: argparse.Namespace) -> int:
         package_manifest=args.package_manifest,
         sbom=args.sbom,
         package_metadata=args.package_metadata,
+        setup_wizard=args.setup_wizard,
         build_info_files=args.build_info_file or [],
         provenance=provenance,
     )
@@ -614,6 +630,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     prepare_assets.add_argument("--package-manifest", type=Path, required=True)
     prepare_assets.add_argument("--sbom", type=Path, required=True)
     prepare_assets.add_argument("--package-metadata", type=Path, required=True)
+    prepare_assets.add_argument("--setup-wizard", type=Path, required=True)
     prepare_assets.add_argument("--build-info-file", type=Path, action="append")
     prepare_assets.add_argument("--imagebuilder-version", required=True)
     prepare_assets.add_argument("--imagebuilder-url", required=True)

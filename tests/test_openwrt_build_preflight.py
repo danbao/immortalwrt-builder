@@ -26,6 +26,22 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
         )
         self.assertNotIn("luci-app-daede", packages)
 
+    def test_repository_profile_contains_portable_runtime_baseline(self) -> None:
+        profile_path = Path(__file__).resolve().parents[1] / "config" / "build-profile.json"
+        profile = preflight.load_build_profile(profile_path)
+        portable_packages = {
+            "tailscale",
+            "luci-app-tailscale-community",
+            "luci-i18n-tailscale-community-zh-cn",
+            "vnstat2",
+            "vnstati2",
+            "luci-app-vnstat2",
+            "luci-i18n-vnstat2-zh-cn",
+            "open-vm-tools",
+        }
+        self.assertLessEqual(portable_packages, set(profile["packages"]))
+        self.assertLessEqual(portable_packages, set(profile["required_packages"]))
+
     def test_profile_rejects_duplicates_missing_required_and_forbidden_packages(self) -> None:
         base = {
             "schema_version": 1,
@@ -104,6 +120,45 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             self.assertIn("BUILD_PROFILE=generic\n", values)
             self.assertIn("ROOTFS_PARTSIZE=2048\n", values)
             self.assertIn("BUILD_PACKAGES=daed\n", values)
+
+    def test_validate_manifest_command_records_every_required_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            tmp = Path(tmp_s)
+            profile_path = tmp / "profile.json"
+            manifest_path = tmp / "image.manifest"
+            metadata_path = tmp / "official-packages.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": "test",
+                        "profile": "generic",
+                        "rootfs_partsize": 2048,
+                        "nic_count": 1,
+                        "image_glob": "*.img.gz",
+                        "packages": ["daed", "tailscale", "vnstat2"],
+                        "required_packages": ["daed", "tailscale", "vnstat2"],
+                        "forbidden_packages": ["luci-app-daede"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                "daed - 1.27.0-r1\ntailscale - 1.98.3-r1\nvnstat2 - 2.13-r1\n",
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                profile=profile_path,
+                manifest=manifest_path,
+                metadata_out=metadata_path,
+            )
+
+            self.assertEqual(preflight.cmd_validate_manifest(args), 0)
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                metadata["packages"],
+                {"daed": "1.27.0-r1", "tailscale": "1.98.3-r1", "vnstat2": "2.13-r1"},
+            )
 
     def test_parse_sha256sums_requires_exactly_one_archive(self) -> None:
         filename = "immortalwrt-imagebuilder-25.12.1-x86-64.Linux-x86_64.tar.zst"

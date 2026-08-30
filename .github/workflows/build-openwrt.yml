@@ -201,7 +201,7 @@ jobs:
         run: |
           conversion_manifest=manifests/converted-images.json
           if [ "${BUILD_MODE}" = "dry-run" ]; then
-            printf '{"builder_version":"%s","conversions":{}}\n' "10" > build-out/empty-conversions.json
+            printf '{"builder_version":"%s","conversions":{}}\n' "11" > build-out/empty-conversions.json
             conversion_manifest=build-out/empty-conversions.json
           fi
           python3 scripts/openwrt_img_to_ova.py scan \
@@ -238,6 +238,7 @@ jobs:
             --package-manifest build-out/final-image.manifest \
             --sbom build-out/final-image.bom.cdx.json \
             --package-metadata build-out/official-packages.json \
+            --setup-wizard scripts/setup-openwrt.sh \
             "${build_info_args[@]}" \
             --imagebuilder-version "${IB_VERSION}" \
             --imagebuilder-url "${IB_BASE_URL}/${IB_ARCHIVE}" \
