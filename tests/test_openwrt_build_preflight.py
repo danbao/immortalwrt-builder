@@ -38,6 +38,7 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             "luci-app-vnstat2",
             "luci-i18n-vnstat2-zh-cn",
             "open-vm-tools",
+            "sqlite3-cli",
         }
         self.assertLessEqual(portable_packages, set(profile["packages"]))
         self.assertLessEqual(portable_packages, set(profile["required_packages"]))

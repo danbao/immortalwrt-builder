@@ -1,0 +1,190 @@
+#!/bin/sh
+
+set -eu
+
+if [ -n "${DAED_MAINTENANCE_TEST_ROOT:-}" ]; then
+	resolved_test_root="$(CDPATH= cd "$DAED_MAINTENANCE_TEST_ROOT" 2>/dev/null && pwd -P)" || {
+		echo "maintenance test root does not exist" >&2
+		exit 2
+	}
+	case "$resolved_test_root" in
+		/tmp/*|/var/folders/*|/private/var/folders/*) ;;
+		*) echo "unsafe maintenance test root" >&2; exit 2 ;;
+	esac
+	DAED_DB="$resolved_test_root/wing.db"
+	DAED_BACKUP_DIR="$resolved_test_root/backups"
+	DAED_HEALTH_STATE="$resolved_test_root/health.state"
+	DAED_MAINTENANCE_LOCK="$resolved_test_root/maintenance.lock"
+	FLOCK_BIN="${FLOCK_BIN:-flock}"
+	UCI_BIN="${UCI_BIN:-uci}"
+	PIDOF_BIN="${PIDOF_BIN:-pidof}"
+	WGET_BIN="${WGET_BIN:-wget}"
+	JSONFILTER_BIN="${JSONFILTER_BIN:-jsonfilter}"
+	NSLOOKUP_BIN="${NSLOOKUP_BIN:-nslookup}"
+	FETCH_BIN="${FETCH_BIN:-uclient-fetch}"
+	LOGGER_BIN="${LOGGER_BIN:-logger}"
+	DAED_INIT="${DAED_INIT:-/etc/init.d/daed}"
+else
+	DAED_DB="/etc/daed/wing.db"
+	DAED_BACKUP_DIR="/etc/daed/backups"
+	DAED_HEALTH_STATE="/tmp/daed-health.failures"
+	DAED_MAINTENANCE_LOCK="/var/lock/daed-maintenance.lock"
+	FLOCK_BIN="flock"
+	UCI_BIN="uci"
+	PIDOF_BIN="pidof"
+	WGET_BIN="wget"
+	JSONFILTER_BIN="jsonfilter"
+	NSLOOKUP_BIN="nslookup"
+	FETCH_BIN="uclient-fetch"
+	LOGGER_BIN="logger"
+	DAED_INIT="/etc/init.d/daed"
+fi
+
+SQLITE3_BIN="sqlite3"
+DAED_GRAPHQL_URL="http://127.0.0.1:2023/graphql"
+DIRECT_CHECK_URL="https://www.baidu.com/"
+PROXY_CHECK_URL="https://www.gstatic.com/generate_204"
+AI_CHECK_URL="https://chatgpt.com/cdn-cgi/trace"
+
+umask 077
+mkdir -p "$(dirname "$DAED_MAINTENANCE_LOCK")"
+exec 9>"$DAED_MAINTENANCE_LOCK"
+"$FLOCK_BIN" -n 9 || exit 0
+
+log_notice() {
+	"$LOGGER_BIN" -t daed-maintenance -- "$1"
+}
+
+backup_database() {
+	[ -s "$DAED_DB" ] || return 0
+	mkdir -p "$DAED_BACKUP_DIR"
+	chmod 700 "$DAED_BACKUP_DIR"
+
+	stamp="$(date +%Y%m%d-%H%M%S)"
+	temporary="$DAED_BACKUP_DIR/.wing-${stamp}-$$.db"
+	destination="$DAED_BACKUP_DIR/wing-${stamp}-$$.db"
+	trap 'rm -f "$temporary"' EXIT HUP INT TERM
+
+	"$SQLITE3_BIN" "$DAED_DB" ".timeout 5000" ".backup '$temporary'"
+	check_result="$("$SQLITE3_BIN" "$temporary" 'PRAGMA quick_check;')"
+	if [ "$check_result" != "ok" ]; then
+		echo "daed database backup failed quick_check: $check_result" >&2
+		exit 1
+	fi
+
+	chmod 600 "$temporary"
+	mv "$temporary" "$destination"
+	trap - EXIT HUP INT TERM
+
+	# Backup files never contain whitespace; retain the seven newest snapshots.
+	ls -1t "$DAED_BACKUP_DIR"/wing-*.db 2>/dev/null |
+		sed -n '8,$p' |
+		while IFS= read -r old_backup; do
+			rm -f "$old_backup"
+		done
+}
+
+restore_database() {
+	backup="${1:-}"
+	backup_parent="$(CDPATH= cd "$(dirname "$backup")" 2>/dev/null && pwd -P)" || true
+	managed_parent="$(CDPATH= cd "$DAED_BACKUP_DIR" 2>/dev/null && pwd -P)" || true
+	case "$(basename "$backup")" in
+		wing-*.db) ;;
+		*) echo "refusing invalid daed backup name" >&2; exit 2 ;;
+	esac
+	[ -n "$backup_parent" ] && [ "$backup_parent" = "$managed_parent" ] || {
+		echo "refusing daed backup outside the managed backup directory" >&2
+		exit 2
+	}
+	[ -f "$backup" ] && [ ! -L "$backup" ] || {
+		echo "daed backup is not a regular file" >&2
+		exit 2
+	}
+	[ "$("$SQLITE3_BIN" "$backup" 'PRAGMA quick_check;')" = "ok" ] || {
+		echo "daed backup failed quick_check" >&2
+		exit 1
+	}
+
+	replacement="${DAED_DB}.restore-$$"
+	trap 'rm -f "$replacement"; "$DAED_INIT" start >/dev/null 2>&1 || true' EXIT HUP INT TERM
+	"$DAED_INIT" stop >/dev/null 2>&1 || true
+	cp -p "$backup" "$replacement"
+	chmod 640 "$replacement"
+	mv "$replacement" "$DAED_DB"
+	"$DAED_INIT" start >/dev/null 2>&1
+	trap - EXIT HUP INT TERM
+}
+
+append_failure() {
+	if [ -z "${failures:-}" ]; then
+		failures="$1"
+	else
+		failures="$failures,$1"
+	fi
+}
+
+health_check() {
+	enabled="$("$UCI_BIN" -q get daed.config.enabled 2>/dev/null || true)"
+	[ "$enabled" = "1" ] || {
+		rm -f "$DAED_HEALTH_STATE"
+		return 0
+	}
+
+	failures=""
+	"$PIDOF_BIN" daed >/dev/null 2>&1 || append_failure process
+
+	graphql_response="$(
+		"$WGET_BIN" -qO- -T 5 \
+			--header='Content-Type: application/json' \
+			--post-data='{"query":"query { numberUsers healthCheck }"}' \
+			"$DAED_GRAPHQL_URL" 2>/dev/null || true
+	)"
+	number_users="$("$JSONFILTER_BIN" -s "$graphql_response" -e '@.data.numberUsers' 2>/dev/null || true)"
+	if [ "$number_users" = "0" ]; then
+		rm -f "$DAED_HEALTH_STATE"
+		return 0
+	fi
+	graphql_health="$("$JSONFILTER_BIN" -s "$graphql_response" -e '@.data.healthCheck' 2>/dev/null || true)"
+	case "$graphql_health" in
+		''|0) append_failure graphql ;;
+	esac
+
+	"$NSLOOKUP_BIN" www.baidu.com 127.0.0.1 >/dev/null 2>&1 || append_failure dns-cn
+	"$NSLOOKUP_BIN" www.google.com 127.0.0.1 >/dev/null 2>&1 || append_failure dns-foreign
+	"$FETCH_BIN" -q -T 10 -O /dev/null "$DIRECT_CHECK_URL" >/dev/null 2>&1 || append_failure direct-connectivity
+	"$FETCH_BIN" -q -T 10 -O /dev/null "$PROXY_CHECK_URL" >/dev/null 2>&1 || append_failure proxy-connectivity
+	"$FETCH_BIN" -q -T 10 -O /dev/null "$AI_CHECK_URL" >/dev/null 2>&1 || append_failure ai-connectivity
+
+	previous=0
+	if [ -s "$DAED_HEALTH_STATE" ]; then
+		previous="$(sed -n '1p' "$DAED_HEALTH_STATE" 2>/dev/null || echo 0)"
+	fi
+	case "$previous" in
+		''|*[!0-9]*) previous=0 ;;
+	esac
+
+	if [ -z "$failures" ]; then
+		if [ "$previous" -ge 3 ]; then
+			log_notice "health check recovered after $previous consecutive failures"
+		fi
+		rm -f "$DAED_HEALTH_STATE"
+		return 0
+	fi
+
+	count=$((previous + 1))
+	printf '%s\n%s\n' "$count" "$failures" > "$DAED_HEALTH_STATE"
+	chmod 600 "$DAED_HEALTH_STATE"
+	if [ "$count" -eq 3 ]; then
+		log_notice "health check failed 3 consecutive times: $failures; no automatic restart was attempted"
+	fi
+}
+
+case "${1:-}" in
+	backup) backup_database ;;
+	health) health_check ;;
+	restore) restore_database "${2:-}" ;;
+	*)
+		echo "usage: $0 {backup|health|restore BACKUP}" >&2
+		exit 2
+		;;
+esac

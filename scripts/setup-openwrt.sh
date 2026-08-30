@@ -296,8 +296,29 @@ verify_router() {
     echo "daed=$(pidof daed >/dev/null && echo running || echo stopped)"
     echo "tailscale=$(tailscale status --json >/dev/null 2>&1 && echo running || echo stopped)"
     echo "vnstat=$(pidof vnstatd >/dev/null && echo running || echo stopped)"
+    echo "maintenance=$(test -x /usr/libexec/daed-maintenance && echo installed || echo missing)"
+    echo "maintenance_cron=$(grep -cF "/usr/libexec/daed-maintenance" /etc/crontabs/root 2>/dev/null || true)"
+    latest_backup=$(ls -1t /etc/daed/backups/wing-*.db 2>/dev/null | head -n1 || true)
+    echo "latest_daed_backup=${latest_backup:-none}"
+    echo "health_failures=$(sed -n "1p" /tmp/daed-health.failures 2>/dev/null || echo 0)"
+    echo "health_failure_components=$(sed -n "2p" /tmp/daed-health.failures 2>/dev/null || echo none)"
+    set -- $(awk '\''/closed network connection/{closed++} /database is locked|SQLITE_BUSY/{busy++} END{printf "%d %d",closed,busy}'\'' /var/log/daed/daed.log 2>/dev/null || printf "0 0")
+    current_closed=${1:-0}; current_busy=${2:-0}
+    observation_started=$(sed -n "1p" /etc/openwrt-setup/daed-observation.state 2>/dev/null || echo 0)
+    baseline_closed=$(sed -n "2p" /etc/openwrt-setup/daed-observation.state 2>/dev/null || echo 0)
+    baseline_busy=$(sed -n "3p" /etc/openwrt-setup/daed-observation.state 2>/dev/null || echo 0)
+    baseline_line=$(sed -n "4p" /etc/openwrt-setup/daed-observation.state 2>/dev/null || echo 0)
+    [ "$current_closed" -ge "$baseline_closed" ] 2>/dev/null && observed_closed=$((current_closed-baseline_closed)) || observed_closed=$current_closed
+    [ "$current_busy" -ge "$baseline_busy" ] 2>/dev/null && observed_busy=$((current_busy-baseline_busy)) || observed_busy=$current_busy
+    current_lines=$(wc -l < /var/log/daed/daed.log 2>/dev/null || echo 0)
+    [ "$baseline_line" -le "$current_lines" ] 2>/dev/null && observation_line=$((baseline_line+1)) || observation_line=1
+    endpoint_summary=$(sed -n "${observation_line},\$p" /var/log/daed/daed.log 2>/dev/null |
+      sed -n "s/.*read tcp [^ ]*->\([^: ]*:[0-9][0-9]*\): use of closed network connection.*/\1/p" |
+      sort | uniq -c | sort -nr |
+      awk '\''NR==1{dominant=$1} {total+=$1} END{if(total>0) printf "%d:%d",dominant,dominant*100/total; else printf "0:0"}'\'')
+    echo "daed_observation=started:${observation_started},closed_network:${observed_closed},sqlite_busy:${observed_busy},dominant_endpoint_count_share:${endpoint_summary}%"
     tailscale status 2>/dev/null | sed -n "1,6p" || true
-    sysupgrade -l 2>/dev/null | grep -E "^/etc/(daed/wing.db|tailscale/|vnstat/)" || true'
+    sysupgrade -l 2>/dev/null | grep -E "^/etc/(daed/(wing.db|backups/)|tailscale/|vnstat/)" || true'
 }
 
 for command in ssh curl jq tar; do
@@ -323,16 +344,18 @@ validate_target "$TARGET" || exit 2
 write_env TARGET "$TARGET"
 say "Checking the signed firmware package baseline before touching configuration."
 ssh_router 'set -eu
+  command -v sqlite3 >/dev/null || { echo "missing required command: sqlite3" >&2; exit 1; }
+  command -v flock >/dev/null || { echo "missing required command: flock" >&2; exit 1; }
   for package in daed daed-geoip daed-geosite luci-app-daed luci-i18n-daed-zh-cn \
     tailscale luci-app-tailscale-community luci-i18n-tailscale-community-zh-cn \
-    vnstat2 vnstati2 luci-app-vnstat2 luci-i18n-vnstat2-zh-cn open-vm-tools; do
+    vnstat2 vnstati2 luci-app-vnstat2 luci-i18n-vnstat2-zh-cn sqlite3-cli open-vm-tools; do
     apk info -e "$package" >/dev/null || { echo "missing firmware package: $package" >&2; exit 1; }
   done'
 backup_path=$(ssh_router 'set -eu
   stamp=$(date +%Y%m%d-%H%M%S)
   path="/root/openwrt-setup-backup-${stamp}.tar.gz"
   set -- /etc/config
-  for candidate in /etc/daed/wing.db /etc/tailscale /etc/dropbear /etc/sysupgrade.conf /etc/vnstat.conf /etc/vnstat; do
+  for candidate in /etc/daed/wing.db /etc/daed/backups /etc/tailscale /etc/dropbear /etc/sysupgrade.conf /etc/vnstat.conf /etc/vnstat; do
     [ ! -e "$candidate" ] || set -- "$@" "$candidate"
   done
   tar -czf "$path" "$@"
@@ -416,7 +439,7 @@ ssh_router 'set -eu
   fi
   grep -q "^DatabaseDir \"/etc/vnstat\"" /etc/vnstat.conf || printf "\nDatabaseDir \"/etc/vnstat\"\n" >> /etc/vnstat.conf
   grep -q "^SaveInterval " /etc/vnstat.conf || printf "SaveInterval 5\n" >> /etc/vnstat.conf
-  for path in /etc/daed/wing.db /etc/tailscale/ /etc/vnstat/ /etc/openwrt-setup/; do
+  for path in /etc/daed/wing.db /etc/daed/backups/ /etc/tailscale/ /etc/vnstat/ /etc/openwrt-setup/; do
     grep -qxF "$path" /etc/sysupgrade.conf || printf "%s\n" "$path" >> /etc/sysupgrade.conf
   done
   /etc/init.d/vnstat enable
@@ -464,9 +487,17 @@ else
 fi
 AUTH_HEADER=(-H "Authorization: Bearer ${DAED_TOKEN}")
 
-daed_backup=$(ssh_router 'set -eu; stamp=$(date +%Y%m%d-%H%M%S); path="/etc/daed/wing.db.setup-${stamp}"; cp -p /etc/daed/wing.db "$path"; chmod 600 "$path"; printf "%s" "$path"')
+daed_backup=$(ssh_router 'set -eu
+  umask 077
+  mkdir -p /etc/daed/backups
+  stamp=$(date +%Y%m%d-%H%M%S)
+  path="/etc/daed/backups/wing-setup-${stamp}.db"
+  sqlite3 /etc/daed/wing.db ".timeout 5000" ".backup '\''$path'\''"
+  [ "$(sqlite3 "$path" "PRAGMA quick_check;")" = "ok" ]
+  chmod 600 "$path"
+  printf "%s" "$path"')
 
-DAED_GLOBAL=$(jq -cn '{logLevel:"warn",tcpCheckUrl:["http://cp.cloudflare.com","1.1.1.1"],tcpCheckHttpMethod:"HEAD",udpCheckDns:["dns.google:53","8.8.8.8"],checkInterval:"30s",checkTolerance:"50ms",lanInterface:["br-lan"],wanInterface:["auto"],allowInsecure:false,dialMode:"domain",disableWaitingNetwork:false,enableLocalTcpFastRedirect:false,autoConfigKernelParameter:true,autoConfigFirewallRule:false,sniffingTimeout:"100ms",tlsImplementation:"tls",utlsImitate:"chrome_auto",tlsFragment:false,pprofPort:0,mptcp:false,fallbackResolver:"8.8.8.8:53"}')
+DAED_GLOBAL=$(jq -cn '{logLevel:"warn",tcpCheckUrl:["http://cp.cloudflare.com","1.1.1.1"],tcpCheckHttpMethod:"HEAD",udpCheckDns:["dns.google:53","8.8.8.8"],checkInterval:"30s",checkTolerance:"50ms",lanInterface:["br-lan"],wanInterface:["auto"],allowInsecure:false,dialMode:"domain",disableWaitingNetwork:false,enableLocalTcpFastRedirect:false,autoConfigKernelParameter:true,autoConfigFirewallRule:false,sniffingTimeout:"50ms",tlsImplementation:"tls",utlsImitate:"chrome_auto",tlsFragment:false,pprofPort:0,mptcp:false,fallbackResolver:"8.8.8.8:53"}')
 DAED_DNS=$(cat <<'DAED_DNS_EOF'
 ipversion_prefer: 4
 upstream {
@@ -476,6 +507,7 @@ upstream {
 routing {
   request {
     qtype(https) -> reject
+    qname(suffix: tailscale.com) -> alidns
     qname(suffix: openai.com, suffix: chatgpt.com, suffix: oaistatic.com, suffix: oaiusercontent.com, suffix: anthropic.com, suffix: claude.ai, suffix: perplexity.ai, suffix: x.ai, suffix: grok.com, suffix: gemini.google.com, suffix: generativelanguage.googleapis.com, suffix: ai.google.dev, suffix: makersuite.google.com, suffix: copilot.microsoft.com, suffix: githubcopilot.com) -> googledns
     qname(geosite:category-ai-!cn) -> googledns
     qname(geosite:cn) -> alidns
@@ -495,6 +527,7 @@ pname(tailscaled) -> must_direct
 domain(suffix: tailscale.com) -> direct
 l4proto(udp) && dport(3478) -> direct
 l4proto(udp) && sport(41641) -> direct
+dip(224.0.0.0/3, 'ff00::/8') -> direct
 dip(geoip:private) -> direct
 domain(suffix: openai.com, suffix: chatgpt.com, suffix: oaistatic.com, suffix: oaiusercontent.com, suffix: anthropic.com, suffix: claude.ai, suffix: perplexity.ai, suffix: x.ai, suffix: grok.com, suffix: gemini.google.com, suffix: generativelanguage.googleapis.com, suffix: ai.google.dev, suffix: makersuite.google.com, suffix: copilot.microsoft.com, suffix: githubcopilot.com) -> ai
 domain(geosite:category-ai-!cn) -> ai
@@ -505,12 +538,19 @@ DAED_ROUTING_EOF
 )
 
 configure_daed() {
-  local state config_id dns_id routing_id subscription_id proxy_id ai_id response desired_nodes current_nodes add_nodes del_nodes
-  state=$(graphql "$(jq -cn '{query:"query { configs(selected:true){id} dnss(selected:true){id} routings(selected:true){id} groups{id name nodes{id} subscriptions{id}} subscriptions{id tag nodes{edges{id name}}} }"}')" "${AUTH_HEADER[@]}") || return 1
+  local state config_id dns_id routing_id subscription_id proxy_id ai_id response desired_nodes current_nodes add_nodes del_nodes preserved_global merged_global global_schema global_fields state_query
+  global_schema=$(graphql "$(jq -cn '{query:"query { __type(name:\"globalInput\"){inputFields{name}} }"}')" "${AUTH_HEADER[@]}") || return 1
+  global_fields=$(jq -r '[.data.__type.inputFields[].name] | sort | join(" ")' <<<"$global_schema") || return 1
+  [[ -n "$global_fields" && "$global_fields" =~ ^[A-Za-z0-9_\ ]+$ ]] || return 1
+  [[ " $global_fields " == *" bandwidthMaxTx "* && " $global_fields " == *" bandwidthMaxRx "* ]] || return 1
+  state_query=$(jq -cn --arg fields "$global_fields" '{query:("query { configs(selected:true){id global{"+$fields+"}} dnss(selected:true){id} routings(selected:true){id} groups{id name nodes{id} subscriptions{id}} subscriptions{id tag nodes{edges{id name}}} }")}')
+  state=$(graphql "$state_query" "${AUTH_HEADER[@]}") || return 1
 
   config_id=$(jq -r '.data.configs[0].id // empty' <<<"$state")
   if [[ -n "$config_id" ]]; then
-    response=$(graphql "$(jq -cn --arg id "$config_id" --argjson global "$DAED_GLOBAL" '{query:"mutation($id:ID!,$global:globalInput!){updateConfig(id:$id,global:$global){id}}",variables:{id:$id,global:$global}}')" "${AUTH_HEADER[@]}") || return 1
+    preserved_global=$(jq -c '.data.configs[0].global // {} | with_entries(select(.value != null and .value != ""))' <<<"$state")
+    merged_global=$(jq -cn --argjson current "$preserved_global" --argjson managed "$DAED_GLOBAL" '$current * $managed')
+    response=$(graphql "$(jq -cn --arg id "$config_id" --argjson global "$merged_global" '{query:"mutation($id:ID!,$global:globalInput!){updateConfig(id:$id,global:$global){id}}",variables:{id:$id,global:$global}}')" "${AUTH_HEADER[@]}") || return 1
     jq -e '.data.updateConfig.id and ((.errors // [])|length==0)' >/dev/null <<<"$response" || return 1
   else
     response=$(graphql "$(jq -cn --argjson global "$DAED_GLOBAL" '{query:"mutation($global:globalInput!){createConfig(name:\"portable\",global:$global){id}}",variables:{global:$global}}')" "${AUTH_HEADER[@]}") || return 1
@@ -586,13 +626,7 @@ configure_daed() {
 
 if ! configure_daed; then
   warn "daed configuration failed; restoring the pre-stage database"
-  ssh_router sh -s -- "$daed_backup" <<'ROUTER_DAED_ROLLBACK'
-set -eu
-backup="$1"
-/etc/init.d/daed stop || true
-cp -p "$backup" /etc/daed/wing.db
-/etc/init.d/daed restart
-ROUTER_DAED_ROLLBACK
+  ssh_router /usr/libexec/daed-maintenance restore "$daed_backup"
   exit 1
 fi
 note "daed dry-run and live reload succeeded"
