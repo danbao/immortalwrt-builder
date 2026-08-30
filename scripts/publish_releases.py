@@ -38,6 +38,7 @@ REQUIRED_RUNTIME_PACKAGES = {
     "vnstati2",
     "luci-app-vnstat2",
     "luci-i18n-vnstat2-zh-cn",
+    "sqlite3-cli",
     "open-vm-tools",
 }
 

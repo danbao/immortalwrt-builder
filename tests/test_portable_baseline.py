@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -9,6 +10,8 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MIGRATION_SCRIPT = REPOSITORY_ROOT / "files/etc/uci-defaults/99-bypass-router.sh"
 SETUP_WIZARD = REPOSITORY_ROOT / "scripts/setup-openwrt.sh"
+MAINTENANCE_SCRIPT = REPOSITORY_ROOT / "files/usr/libexec/daed-maintenance"
+MAINTENANCE_MIGRATION = REPOSITORY_ROOT / "files/etc/uci-defaults/98-daed-maintenance.sh"
 
 
 class PortableBaselineTests(unittest.TestCase):
@@ -146,6 +149,90 @@ class PortableBaselineTests(unittest.TestCase):
         self.assertIn('nodes{edges{id name}}', payload)
         self.assertIn('run(dry:true)', payload)
         self.assertIn('run(dry:false)', payload)
+        self.assertIn('sniffingTimeout:"50ms"', payload)
+        self.assertIn("qname(suffix: tailscale.com) -> alidns", payload)
+        self.assertIn("dip(224.0.0.0/3, 'ff00::/8') -> direct", payload)
+        self.assertIn("bandwidthMaxTx", payload)
+        self.assertIn("bandwidthMaxRx", payload)
+        self.assertIn('__type(name:\\"globalInput\\")', payload)
+        self.assertIn('inputFields{name}', payload)
+        self.assertIn("'$current * $managed'", payload)
+        self.assertIn('daed-maintenance restore "$daed_backup"', payload)
+
+    def test_daed_global_merge_preserves_bandwidth_and_future_fields(self) -> None:
+        current = {
+            "bandwidthMaxTx": "200 mbps",
+            "bandwidthMaxRx": "1 gbps",
+            "futureCompatibilityField": "keep-me",
+            "sniffingTimeout": "100ms",
+        }
+        managed = {"sniffingTimeout": "50ms", "logLevel": "warn"}
+        result = subprocess.run(
+            [
+                "jq", "-cn",
+                "--argjson", "current", json.dumps(current),
+                "--argjson", "managed", json.dumps(managed),
+                "$current * $managed",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        merged = json.loads(result.stdout)
+        self.assertEqual(merged["bandwidthMaxTx"], "200 mbps")
+        self.assertEqual(merged["bandwidthMaxRx"], "1 gbps")
+        self.assertEqual(merged["futureCompatibilityField"], "keep-me")
+        self.assertEqual(merged["sniffingTimeout"], "50ms")
+
+    def test_daed_maintenance_overlay_is_busybox_compatible_and_persistent(self) -> None:
+        subprocess.run(["sh", "-n", str(MAINTENANCE_SCRIPT)], check=True)
+        subprocess.run(["sh", "-n", str(MAINTENANCE_MIGRATION)], check=True)
+        maintenance = MAINTENANCE_SCRIPT.read_text(encoding="utf-8")
+        migration = MAINTENANCE_MIGRATION.read_text(encoding="utf-8")
+        sysupgrade = (REPOSITORY_ROOT / "files/etc/sysupgrade.conf").read_text(encoding="utf-8")
+        self.assertIn("PRAGMA quick_check", maintenance)
+        self.assertIn("healthCheck", maintenance)
+        self.assertIn("flock", maintenance)
+        self.assertIn("*/10 * * * * /usr/libexec/daed-maintenance health", migration)
+        self.assertIn("17 4 * * * /usr/libexec/daed-maintenance backup", migration)
+        self.assertNotRegex(migration, r"set\s+--\s+\$\(")
+        self.assertIn("/etc/daed/backups/", sysupgrade)
+
+    def test_daed_maintenance_migration_preserves_existing_cron_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            root = Path(tmp_s)
+            crontab = root / "etc/crontabs/root"
+            crontab.parent.mkdir(parents=True)
+            crontab.write_text("5 1 * * * /usr/bin/custom-job\n", encoding="utf-8")
+            sysupgrade = root / "etc/sysupgrade.conf"
+            sysupgrade.parent.mkdir(parents=True, exist_ok=True)
+            sysupgrade.write_text("/etc/daed/wing.db\n", encoding="utf-8")
+            cron_init = root / "etc/init.d/cron"
+            cron_init.parent.mkdir(parents=True)
+            cron_init.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            cron_init.chmod(0o755)
+            migration = root / "migration.sh"
+            migration.write_text(
+                MAINTENANCE_MIGRATION.read_text(encoding="utf-8").replace(
+                    "/etc/", f"{root}/etc/"
+                ),
+                encoding="utf-8",
+            )
+            migration.chmod(0o755)
+
+            subprocess.run(["sh", str(migration)], check=True)
+            first = crontab.read_text(encoding="utf-8")
+            subprocess.run(["sh", str(migration)], check=True)
+            second = crontab.read_text(encoding="utf-8")
+
+            self.assertEqual(first, second)
+            self.assertIn("/usr/bin/custom-job", second)
+            self.assertEqual(second.count("daed-maintenance health"), 1)
+            self.assertEqual(second.count("daed-maintenance backup"), 1)
+            self.assertTrue(
+                (root / "etc/openwrt-setup/migrations/2026-08-daed-maintenance-v1").is_file()
+            )
+            self.assertTrue((root / "etc/openwrt-setup/daed-observation.state").is_file())
 
 
 if __name__ == "__main__":

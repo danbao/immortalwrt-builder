@@ -24,6 +24,7 @@
     "vnstati2",
     "luci-app-vnstat2",
     "luci-i18n-vnstat2-zh-cn",
+    "sqlite3-cli",
     "open-vm-tools"
   ],
   "required_packages": [
@@ -45,6 +46,7 @@
     "vnstati2",
     "luci-app-vnstat2",
     "luci-i18n-vnstat2-zh-cn",
+    "sqlite3-cli",
     "open-vm-tools"
   ],
   "forbidden_packages": [
