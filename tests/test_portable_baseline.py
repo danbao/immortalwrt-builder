@@ -195,6 +195,7 @@ class PortableBaselineTests(unittest.TestCase):
         self.assertIn("flock", maintenance)
         self.assertIn("*/10 * * * * /usr/libexec/daed-maintenance health", migration)
         self.assertIn("17 4 * * * /usr/libexec/daed-maintenance backup", migration)
+        self.assertNotRegex(migration, r"set\s+--\s+\$\(")
         self.assertIn("/etc/daed/backups/", sysupgrade)
 
     def test_daed_maintenance_migration_preserves_existing_cron_and_is_idempotent(self) -> None:

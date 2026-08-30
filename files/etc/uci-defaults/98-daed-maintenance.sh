@@ -31,17 +31,19 @@ grep -qxF "$BACKUP_CRON" "$CRONTAB" || printf '%s\n' "$BACKUP_CRON" >> "$CRONTAB
 grep -qxF '/etc/daed/backups/' "/etc/sysupgrade.conf" || printf '%s\n' '/etc/daed/backups/' >> "/etc/sysupgrade.conf"
 
 if [ ! -e "$OBSERVATION_STATE" ]; then
-	set -- $(awk '
+	log_counts="$(awk '
 		/closed network connection/ { closed++ }
 		/database is locked|SQLITE_BUSY/ { busy++ }
 		END { printf "%d %d", closed, busy }
-	' "/var/log/daed/daed.log" 2>/dev/null || printf '0 0')
+	' "/var/log/daed/daed.log" 2>/dev/null || printf '0 0')"
+	closed_count="${log_counts%% *}"
+	busy_count="${log_counts#* }"
 	if [ -f "/var/log/daed/daed.log" ]; then
 		log_lines="$(wc -l < "/var/log/daed/daed.log")"
 	else
 		log_lines=0
 	fi
-	printf '%s\n%s\n%s\n%s\n' "$(date +%s)" "${1:-0}" "${2:-0}" "$log_lines" > "$OBSERVATION_STATE"
+	printf '%s\n%s\n%s\n%s\n' "$(date +%s)" "$closed_count" "$busy_count" "$log_lines" > "$OBSERVATION_STATE"
 	chmod 600 "$OBSERVATION_STATE"
 fi
 
