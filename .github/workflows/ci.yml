@@ -28,7 +28,9 @@ jobs:
             bash -n "${script}"
             dash -n "${script}"
           done
-          shellcheck scripts/setup-openwrt.sh files/etc/uci-defaults/*.sh
+          # The wizard library owns RED, while SSH wrappers intentionally pass
+          # single-quoted scripts for expansion on the router rather than the host.
+          shellcheck --exclude=SC2016,SC2029,SC2034 scripts/setup-openwrt.sh files/etc/uci-defaults/*.sh
           python3 - <<'PY'
           import json
           from pathlib import Path
