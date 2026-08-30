@@ -2,7 +2,7 @@
 
 这个仓库用于自动构建面向虚拟化环境的 ImmortalWrt x86_64 固件，并把 ImageBuilder 生成的原始镜像转换成可直接导入 ESXi 的 OVA。构建产物通过 GitHub Releases 发布，仓库本身只保存脚本、工作流和轻量级转换记录，不保存大型镜像文件。
 
-当前流程以 ImmortalWrt 25.12.1 官方 ImageBuilder 为基础，不从源码完整编译固件。每次构建产出单一 flavor：官方基础镜像 + daed（eBPF 透明代理一体包）。除 daed 外不内置任何第三方代理或 DNS 插件。
+当前流程以 ImmortalWrt 25.12.1 官方 ImageBuilder 为基础，不从源码完整编译固件。每次构建产出单一 flavor：官方基础镜像、daed、Tailscale、vnStat 和 VMware Guest Tools。所有包均由 ImmortalWrt 官方签名源解析，不内置其他透明代理或 DNS 插件。
 
 ## 产物说明
 
@@ -14,8 +14,9 @@
 - `SHA256SUMS`：本次发布主要资产的统一 SHA256 清单。
 - `*.manifest`：最终镜像的软件包和版本清单。
 - `*.bom.cdx.json`：ImageBuilder 生成的 CycloneDX SBOM。
-- `build-metadata.json`：构建来源、profile、官方 daed 版本和工作流追溯信息。
+- `build-metadata.json`：构建来源、profile、全部必需包版本和工作流追溯信息。
 - `build-metadata.tar.gz`：确定性打包的 ImageBuilder 配置与 buildinfo 证据。
+- `setup-openwrt.sh`：macOS、Linux 和 WSL 可用的主机端初始化向导。
 
 Release tag 使用构建日期、ImmortalWrt commit 和镜像 SHA 标识版本：
 
@@ -75,7 +76,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 2. 读取上游 `sha256sums`，校验 ImageBuilder 文件名、下载地址和 SHA256 后，再下载并解压 `immortalwrt-imagebuilder-${IB_VERSION}-x86-64.Linux-x86_64.tar.zst`。
 3. 读取官方 `version.buildinfo`，采集 `r33869-cf234f8de6d5` 这类版本码，并提取 ImmortalWrt commit。
 4. 关闭 ISO、qcow2、VDI、VMDK、VHDX 等辅助镜像格式，只保留后续需要的 raw image。
-5. 读取 `config/build-profile.json`，执行 `make manifest`，验证官方 `daed`、geodata、`luci-app-daed` 和中文翻译包齐全，同时拒绝旧 `luci-app-daede` 及冲突代理组件。
+5. 读取 `config/build-profile.json`，执行 `make manifest`，验证 daed、Tailscale、vnStat、open-vm-tools 及其 LuCI 组件齐全，同时拒绝旧 `luci-app-daede` 及冲突代理组件。
 6. `validate` 模式到此结束；其他模式执行 `make image`，并强制要求恰好一个 raw image、一个最终 manifest 和一个 CycloneDX SBOM。
 7. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，再由 `prepare-assets` 生成统一校验和、供应链元数据和确定性 buildinfo 归档。
 8. `dry-run` 只上传临时 Artifact；`publish` 将一日有效的交接 Artifact 传给 GitHub 托管发布 job。
@@ -93,13 +94,16 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 - ImmortalWrt 官方 `daed` 服务
 - 官方 `daed-geoip`、`daed-geosite`
 - 官方 `luci-app-daed` 与 `luci-i18n-daed-zh-cn`
+- 官方 `tailscale`、社区 LuCI 管理页及中文翻译
+- `vnstat2`、`vnstati2`、LuCI 管理页及中文翻译
+- `open-vm-tools`（在 VMware 环境使用，IMG 中保留但不会影响物理机或其他虚拟化平台）
 - 防火墙和软件包管理器中文翻译
 
 镜像明确不包含 PassWall 2、OpenClash、Nikki/Mihomo、MosDNS 等透明代理/DNS 插件，避免多套透明代理规则互相打架。
 
 固件内置旁路由调优（`files/` 覆盖层）：
 
-- 启用 IPv4/IPv6 转发。
+- 启用 IPv4 转发；IPv6 继续由主路由直接提供，不经过本旁路由代理。
 - 使用 BBR 和 `fq`。
 - 提高 conntrack 与 socket buffer 上限。
 - 禁止 ICMP redirect。
@@ -111,7 +115,14 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 - 默认启用 irqbalance 自启，把软中断和网卡中断分散到多个 CPU 核心。
 - 根分区大小为 2048 MB。
 
-导入虚拟机后，请为 LAN 配置一个不与主路由冲突的静态地址，然后通过官方 `luci-app-daed` 或 daed 支持的配置方式完成配置并启动服务。官方界面不保证复刻旧 daede 的订阅工作流；缺失的 UI 操作需要按 daed 官方配置格式手工完成。
+新镜像不预置 LAN 地址、账号、SSH 密钥、订阅或设备身份。导入后优先运行 Release 中的向导：
+
+```bash
+chmod +x setup-openwrt.sh
+./setup-openwrt.sh --target root@192.168.1.1
+```
+
+向导会先在路由器内创建 `0600` 回滚备份，再配置 LAN、SSH、daed、Tailscale 和 vnStat。它只在主机保存目标地址、网段、网关、DNS、主机名和 SSH 公钥路径；密码、订阅 URI 与认证令牌不会写入文件。重复运行会复用现有 daed 和 Tailscale 状态。只做状态检查可使用 `./setup-openwrt.sh --target root@HOST --check`。详细行为见 [便携式运行基线与升级保护](docs/portable-runtime-baseline.md)。
 
 ## 关于 daed
 
@@ -182,6 +193,7 @@ python3 scripts/openwrt_img_to_ova.py prepare-assets \
   --package-manifest build-out/final-image.manifest \
   --sbom build-out/final-image.bom.cdx.json \
   --package-metadata build-out/official-packages.json \
+  --setup-wizard scripts/setup-openwrt.sh \
   --build-info-file build-out/imagebuilder.config \
   --imagebuilder-version 25.12.1 \
   --imagebuilder-url <verified-imagebuilder-url> \

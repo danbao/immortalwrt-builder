@@ -26,20 +26,30 @@ class PublishReleasesTests(unittest.TestCase):
             f"immortalwrt-x86-64-daed-20260713-cf-{suffix}.bom.cdx.json",
             "build-metadata.json",
             "build-metadata.tar.gz",
+            "setup-openwrt.sh",
         ]
         for name in names:
             (root / name).write_bytes(f"payload:{name}".encode())
         (root / image_name).write_bytes(image_body)
-        metadata = {
-            "source": "official-immortalwrt",
-            "profile": {"imagebuilder_profile": "generic", "rootfs_partsize": 2048, "nic_count": 1},
-            "packages": {
+        package_versions = {package: "fixture-r1" for package in publish_releases.REQUIRED_RUNTIME_PACKAGES}
+        package_versions.update(
+            {
                 "daed": "1.27.0-r1",
                 "daed-geoip": "20260101-r1",
                 "daed-geosite": "20260101-r1",
                 "luci-app-daed": "1.1.0-r2",
                 "luci-i18n-daed-zh-cn": "1.1.0-r2",
+            }
+        )
+        metadata = {
+            "source": "official-immortalwrt",
+            "profile": {
+                "imagebuilder_profile": "generic",
+                "rootfs_partsize": 2048,
+                "nic_count": 1,
+                "required_packages": sorted(publish_releases.REQUIRED_RUNTIME_PACKAGES),
             },
+            "packages": package_versions,
             "provenance": {
                 "repository_commit": "deadbeef",
                 "workflow_run_url": "https://github.com/example/actions/runs/1",
@@ -83,7 +93,7 @@ class PublishReleasesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_s:
             root = Path(tmp_s)
             item = self.make_release_item(root)
-            self.assertEqual(len(publish_releases.release_asset_paths(item, root)), 8)
+            self.assertEqual(len(publish_releases.release_asset_paths(item, root)), 9)
             with self.assertRaisesRegex(ValueError, "release_assets"):
                 publish_releases.release_asset_paths({}, root)
             item["release_assets"] = [str(root / "../escape.ova")]

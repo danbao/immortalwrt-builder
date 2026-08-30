@@ -23,9 +23,14 @@ jobs:
         run: |
           python3 -m py_compile scripts/*.py
           python3 -m unittest discover -s tests
+          bash -n scripts/setup-openwrt.sh
           for script in files/etc/uci-defaults/*.sh; do
             bash -n "${script}"
+            dash -n "${script}"
           done
+          # The wizard library owns RED, while SSH wrappers intentionally pass
+          # single-quoted scripts for expansion on the router rather than the host.
+          shellcheck --exclude=SC2016,SC2029,SC2034 scripts/setup-openwrt.sh files/etc/uci-defaults/*.sh
           python3 - <<'PY'
           import json
           from pathlib import Path

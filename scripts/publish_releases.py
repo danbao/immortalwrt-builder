@@ -17,8 +17,29 @@ RELEASE_TAG_FAMILY_PATTERNS = (
 )
 ASSET_NAME_PATTERN = re.compile(
     r"^(?:immortalwrt-x86-64.*(?:\.img\.gz|\.ova|\.ova\.sha256|\.manifest|\.bom\.cdx\.json)|"
-    r"SHA256SUMS|build-metadata\.json|build-metadata\.tar\.gz)$"
+    r"SHA256SUMS|build-metadata\.json|build-metadata\.tar\.gz|setup-openwrt\.sh)$"
 )
+REQUIRED_RUNTIME_PACKAGES = {
+    "luci",
+    "luci-i18n-base-zh-cn",
+    "luci-theme-argon",
+    "luci-app-vlmcsd",
+    "luci-i18n-firewall-zh-cn",
+    "luci-i18n-package-manager-zh-cn",
+    "daed",
+    "daed-geoip",
+    "daed-geosite",
+    "luci-app-daed",
+    "luci-i18n-daed-zh-cn",
+    "tailscale",
+    "luci-app-tailscale-community",
+    "luci-i18n-tailscale-community-zh-cn",
+    "vnstat2",
+    "vnstati2",
+    "luci-app-vnstat2",
+    "luci-i18n-vnstat2-zh-cn",
+    "open-vm-tools",
+}
 
 
 def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -138,6 +159,7 @@ def validate_release_payload(
         f"{artifact_name}.bom.cdx.json",
         "build-metadata.json",
         "build-metadata.tar.gz",
+        "setup-openwrt.sh",
         "SHA256SUMS",
     }
     if set(by_name) != expected_names:
@@ -170,9 +192,12 @@ def validate_release_payload(
         raise ValueError("build metadata file does not match build-results.json")
     if metadata.get("source") != "official-immortalwrt":
         raise ValueError("build metadata source must be official-immortalwrt")
-    required_daed = {"daed", "daed-geoip", "daed-geosite", "luci-app-daed", "luci-i18n-daed-zh-cn"}
-    if not required_daed <= set(metadata.get("packages", {})):
-        raise ValueError("build metadata is missing required official daed package versions")
+    metadata_profile = metadata.get("profile", {})
+    declared_required = metadata_profile.get("required_packages", []) if isinstance(metadata_profile, dict) else []
+    if set(declared_required) != REQUIRED_RUNTIME_PACKAGES:
+        raise ValueError("build metadata required package baseline does not match the trusted runtime baseline")
+    if not REQUIRED_RUNTIME_PACKAGES <= set(metadata.get("packages", {})):
+        raise ValueError("build metadata is missing required official package versions")
     provenance = metadata.get("provenance", {})
     for field, expected in (
         ("repository_commit", expected_repository_commit),

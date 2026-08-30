@@ -54,7 +54,16 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
             buildinfo.write_text("CONFIG_SIGNED_PACKAGES=y\n", encoding="utf-8")
             profile = tmp / "profile.json"
             profile.write_text(
-                json.dumps({"schema_version": 1, "name": "daed", "profile": "generic", "rootfs_partsize": 2048, "nic_count": 1}),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": "daed",
+                        "profile": "generic",
+                        "rootfs_partsize": 2048,
+                        "nic_count": 1,
+                        "required_packages": ["daed"],
+                    }
+                ),
                 encoding="utf-8",
             )
             package_metadata = source_dir / "official-packages.json"
@@ -62,6 +71,9 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
                 json.dumps({"source": "official-immortalwrt", "packages": {"daed": "1.27.0-r1"}}),
                 encoding="utf-8",
             )
+            setup_wizard = tmp / "setup-openwrt.sh"
+            setup_wizard.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            setup_wizard.chmod(0o755)
             results = tmp / "build-results.json"
             results.write_text(
                 json.dumps(
@@ -94,6 +106,7 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
                 package_manifest=manifest,
                 sbom=sbom,
                 package_metadata=package_metadata,
+                setup_wizard=setup_wizard,
                 build_info_files=[buildinfo],
                 provenance={
                     "imagebuilder_version": "25.12.1",
@@ -117,6 +130,7 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
                     "release.bom.cdx.json",
                     "build-metadata.json",
                     "build-metadata.tar.gz",
+                    "setup-openwrt.sh",
                     "SHA256SUMS",
                 },
             )
@@ -124,7 +138,9 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
             self.assertEqual(metadata["source"], "official-immortalwrt")
             self.assertEqual(metadata["packages"]["daed"], "1.27.0-r1")
             self.assertEqual(metadata["profile"]["rootfs_partsize"], 2048)
+            self.assertEqual(metadata["profile"]["required_packages"], ["daed"])
             self.assertIn("release.img.gz", metadata["asset_sha256"])
+            self.assertIn("setup-openwrt.sh", metadata["asset_sha256"])
             sums = (out_dir / "SHA256SUMS").read_text(encoding="utf-8")
             self.assertIn("  build-metadata.json\n", sums)
             self.assertIn("  release.bom.cdx.json\n", sums)
@@ -138,6 +154,7 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
                 package_manifest=manifest,
                 sbom=sbom,
                 package_metadata=package_metadata,
+                setup_wizard=setup_wizard,
                 build_info_files=[buildinfo],
                 provenance=metadata["provenance"],
             )
@@ -157,6 +174,7 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
                     package_manifest=tmp / "manifest",
                     sbom=tmp / "missing-sbom.json",
                     package_metadata=tmp / "packages.json",
+                    setup_wizard=tmp / "setup-openwrt.sh",
                     build_info_files=[],
                     provenance={},
                 )

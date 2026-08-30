@@ -16,7 +16,15 @@
     "daed-geoip",
     "daed-geosite",
     "luci-app-daed",
-    "luci-i18n-daed-zh-cn"
+    "luci-i18n-daed-zh-cn",
+    "tailscale",
+    "luci-app-tailscale-community",
+    "luci-i18n-tailscale-community-zh-cn",
+    "vnstat2",
+    "vnstati2",
+    "luci-app-vnstat2",
+    "luci-i18n-vnstat2-zh-cn",
+    "open-vm-tools"
   ],
   "required_packages": [
     "luci",
@@ -29,7 +37,15 @@
     "daed-geoip",
     "daed-geosite",
     "luci-app-daed",
-    "luci-i18n-daed-zh-cn"
+    "luci-i18n-daed-zh-cn",
+    "tailscale",
+    "luci-app-tailscale-community",
+    "luci-i18n-tailscale-community-zh-cn",
+    "vnstat2",
+    "vnstati2",
+    "luci-app-vnstat2",
+    "luci-i18n-vnstat2-zh-cn",
+    "open-vm-tools"
   ],
   "forbidden_packages": [
     "luci-app-daede",

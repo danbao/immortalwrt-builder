@@ -296,7 +296,6 @@ def cmd_validate_manifest(args: argparse.Namespace) -> int:
     official_packages = {
         package: packages[package]
         for package in profile["required_packages"]
-        if package == "daed" or package.startswith("daed-") or package.startswith("luci-app-daed") or package.startswith("luci-i18n-daed")
     }
     write_json(
         args.metadata_out,
