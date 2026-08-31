@@ -173,19 +173,28 @@ jobs:
             fi
           done
 
+      - name: Resolve published release tags
+        if: env.BUILD_MODE == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/openwrt_build_preflight.py release-tags \
+            --repo "${GITHUB_REPOSITORY}" \
+            --output build-out/published-tags.json \
+            --retries 8 \
+            --timeout 30
+
       - name: Convert image to OVA
         id: convert
         if: env.BUILD_MODE != 'validate'
         run: |
-          conversion_manifest=manifests/converted-images.json
-          if [ "${BUILD_MODE}" = "dry-run" ]; then
-            builder_version="$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import openwrt_img_to_ova; print(openwrt_img_to_ova.BUILDER_VERSION)')"
-            printf '{"builder_version":"%s","conversions":{}}\n' "${builder_version}" > build-out/empty-conversions.json
-            conversion_manifest=build-out/empty-conversions.json
+          known_tags_args=()
+          if [ -s build-out/published-tags.json ]; then
+            known_tags_args+=(--known-tags build-out/published-tags.json)
           fi
           python3 scripts/openwrt_img_to_ova.py scan \
             --img-dir build-out \
-            --manifest "${conversion_manifest}" \
+            "${known_tags_args[@]}" \
             --out-dir dist \
             --results dist/build-results.json \
             --nic-count "${NIC_COUNT}" \
@@ -297,15 +306,3 @@ jobs:
             --keep-releases 30 \
             --expected-repository-commit "${GITHUB_SHA}" \
             --expected-workflow-run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-
-      - name: Record release with conflict retries
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REF: ${{ github.ref_name }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python3 scripts/update_release_records.py \
-            --results dist/build-results.json \
-            --target-ref "${TARGET_REF}" \
-            --attempts 3
