@@ -191,7 +191,8 @@ jobs:
             --nic-count "${NIC_COUNT}" \
             --release-date "${BUILD_DATE}" \
             --immortalwrt-version-code "${IMMORTALWRT_VERSION_CODE}" \
-            --immortalwrt-commit "${IMMORTALWRT_COMMIT}"
+            --immortalwrt-commit "${IMMORTALWRT_COMMIT}" \
+            --repository-commit "${GITHUB_SHA}"
           count="$(python3 -c 'import json; print(len(json.load(open("dist/build-results.json"))["built"]))')"
           echo "count=${count}" >> "${GITHUB_OUTPUT}"
 

@@ -12,7 +12,13 @@ import sys
 from pathlib import Path
 
 RELEASE_TAG_FAMILY_PATTERNS = (
-    ("bypass", re.compile(r"^openwrt-immortalwrt-x86-64-bypass-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
+    (
+        "bypass",
+        re.compile(
+            r"^openwrt-immortalwrt-x86-64-bypass-"
+            r"(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12}-[0-9a-f]{12})$"
+        ),
+    ),
     ("daed", re.compile(r"^openwrt-immortalwrt-x86-64-daed-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
     ("standard", re.compile(r"^openwrt-immortalwrt-x86-64-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
 )
