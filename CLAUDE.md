@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repository Does
 
-Single-workflow automation (`.github/workflows/build-openwrt.yml`): assembles ImmortalWrt 25.12.1 x86_64 firmware via the official ImageBuilder, converts it to ESXi-importable OVA files, and publishes GitHub Releases containing the `.ova`, `.ova.sha256`, and raw `.img.gz` (for PVE `qm importdisk`). The workflow builds a single flavor declared in `config/build-profile.json` — official base packages plus daed, Tailscale, vnStat and open-vm-tools — resolved entirely from the official signed ImmortalWrt feeds. The profile `name` (`immortalwrt-x86-64-bypass`) names the whole package set, not one component, and drives the image filename, release tag family, and asset names. Release tags and asset names include build date, ImmortalWrt commit, and image SHA. **Images never enter git** — only small conversion records are committed back to `main` with `[skip ci]`.
+Single-workflow automation (`.github/workflows/build-openwrt.yml`): assembles ImmortalWrt 25.12.1 x86_64 firmware via the official ImageBuilder, converts it to ESXi-importable OVA files, and publishes GitHub Releases containing the `.ova`, `.ova.sha256`, and raw `.img.gz` (for PVE `qm importdisk`). The workflow builds a single flavor declared in `config/build-profile.json` — official base packages plus daed, Tailscale, vnStat and open-vm-tools — resolved entirely from the official signed ImmortalWrt feeds. The profile `name` (`immortalwrt-x86-64-bypass`) names the whole package set, not one component, and drives the image filename, release tag family, and asset names. Release tags and asset names include build date, ImmortalWrt commit, builder commit, and image SHA. **Nothing is ever committed back to git by CI** — the published Releases are the only build state, so no job pushes to `main`.
 
 **Security: this repository is published as public source.** No secrets live in the codebase; if runtime config files are added later, keep them out of git.
 
@@ -17,10 +17,16 @@ Dependencies (Ubuntu): `sudo apt-get install -y qemu-utils` (requires `qemu-img`
 python3 scripts/openwrt_build_preflight.py validate-profile \
   --config config/build-profile.json
 
+# Record the release tags already published (dedup input for scan)
+python3 scripts/openwrt_build_preflight.py release-tags \
+  --repo danbao/immortalwrt-builder \
+  --output dist/published-tags.json
+
 # Convert OpenWrt images in a directory to OVA (output to dist/)
+# Omit --known-tags to always convert, regardless of what is already published.
 python3 scripts/openwrt_img_to_ova.py scan \
   --img-dir <dir-with-img-files> \
-  --manifest manifests/converted-images.json \
+  --known-tags dist/published-tags.json \
   --out-dir dist \
   --results dist/build-results.json \
   --nic-count 1 \
@@ -28,12 +34,6 @@ python3 scripts/openwrt_img_to_ova.py scan \
   --immortalwrt-version-code r33869-cf234f8de6d5 \
   --immortalwrt-commit cf234f8de6d5 \
   --repository-commit deadbeefcafebabe
-
-# Record published builds into manifest + docs (normally done by CI)
-python3 scripts/openwrt_img_to_ova.py record \
-  --results dist/build-results.json \
-  --manifest manifests/converted-images.json \
-  --doc docs/converted-images.md
 ```
 
 Scripts are stdlib-only Python 3 (no pip dependencies). Run these checks before handing off script or workflow changes:
@@ -54,11 +54,10 @@ One job, triggered by `workflow_dispatch` or a daily schedule (02:00 Asia/Shangh
 2. **Release metadata** — reads upstream `version.buildinfo` for values like `r37978-cd0a06bfd3fd`, extracts the ImmortalWrt commit, and combines it with the Asia/Shanghai build date and this repository's `GITHUB_SHA` for release tags and asset names like `openwrt-immortalwrt-x86-64-bypass-20260831-cd0a06bfd3fd-<builder_sha12>-<image_sha12>` and `immortalwrt-x86-64-bypass-esxi-20260831-cd0a06bfd3fd-<builder_sha12>-<image_sha12>.ova`.
 3. **Packages** — every package resolves from the official signed ImmortalWrt 25.12.1 feeds. There is no third-party APK feed and no fallback download path; do not reintroduce one. The full set lives in `config/build-profile.json` (`packages`), gated by `required_packages` and `forbidden_packages`. `validate-profile` exports `BUILD_PROFILE`, `IMAGE_NAME`, `ROOTFS_PARTSIZE`, `NIC_COUNT`, `IMAGE_GLOB`, and `BUILD_PACKAGES` into `GITHUB_ENV`.
 4. **Build** — `make manifest PROFILE="${BUILD_PROFILE}" PACKAGES="${BUILD_PACKAGES}"` first, then `validate-manifest` asserts every `required_packages` entry is present and rejects `forbidden_packages` (the retired `luci-app-daede` plus PassWall2, OpenClash, Nikki/Mihomo, and MosDNS). Then it clears `bin/targets/x86/64` and runs `make image PROFILE=... FILES=${GITHUB_WORKSPACE}/files ROOTFS_PARTSIZE=... PACKAGES=...`. `collect-image-outputs` copies the single matching image to `build-out/${IMAGE_NAME}.img.gz` and requires exactly one `.manifest` and one `.bom.cdx.json`. Bypass-router tuning via `files/`: a sysctl overlay (BBR, raised conntrack limit, larger socket buffers, loose rp_filter, no redirects) and `uci-defaults` scripts that disable DHCP/RA on LAN, set hostname/timezone/NTP, select Argon as the default LuCI theme, enable packet steering, keep software flow offloading disabled for transparent-proxy safety, enable irqbalance, and leave daed disabled until the setup wizard provisions it.
-5. **Convert to OVA** — reuses `scripts/openwrt_img_to_ova.py scan` against `build-out/`, passing build date, ImmortalWrt version code, and commit metadata.
-6. **Publish** — `scripts/openwrt_img_to_ova.py prepare-assets` renames the raw image into `dist/` under its release asset name and assembles the auditable payload (`SHA256SUMS`, `build-metadata.json`, `build-metadata.tar.gz`, manifest, SBOM, setup wizard). `scripts/publish_releases.py` verifies every declared asset, creates or verifies the Release, then prunes old managed releases by family (bypass keeps the latest 30; the legacy daed and standard matchers are retained so historical releases keep getting pruned).
-7. **Record** — manifest + docs are verified against every release tag built in the current run and the latest Release tag, then committed back to the branch.
+5. **Convert to OVA** — in `publish` mode, `openwrt_build_preflight.py release-tags` first writes the repository's existing Release tags to `build-out/published-tags.json`. Then `scripts/openwrt_img_to_ova.py scan` runs against `build-out/`, passing that tag list plus build date, ImmortalWrt version code, and commit metadata. `dry-run` skips the tag fetch so it always converts.
+6. **Publish** — `scripts/openwrt_img_to_ova.py prepare-assets` renames the raw image into `dist/` under its release asset name and assembles the auditable payload (`SHA256SUMS`, `build-metadata.json`, `build-metadata.tar.gz`, manifest, SBOM, setup wizard). `scripts/publish_releases.py` verifies every declared asset, creates or verifies the Release, then prunes old managed releases by family (bypass keeps the latest 30; the legacy daed and standard matchers are retained so historical releases keep getting pruned). This is the final step — the publish job holds `contents: write` solely to create and prune Releases, never to push commits.
 
-History: source-builds of LEDE/ImmortalWrt were abandoned (6h GitHub-hosted job hard limit on 4-core runners; timeout cancellation also kills post-steps so build caches were never saved; LEDE has no ImageBuilder/binary repo). A separate push-triggered convert workflow existed when images were committed to `img/` via LFS — removed when images moved to Releases only. The two-flavor 24.10.6 pipeline (standard + daed, third-party TSV feeds and release-asset ipks) was replaced by a single-flavor 25.12.1 pipeline. That flavor was called `daed` until the profile also absorbed Tailscale, vnStat and open-vm-tools, at which point it was renamed `bypass` because the tag no longer described one component.
+History: source-builds of LEDE/ImmortalWrt were abandoned (6h GitHub-hosted job hard limit on 4-core runners; timeout cancellation also kills post-steps so build caches were never saved; LEDE has no ImageBuilder/binary repo). A separate push-triggered convert workflow existed when images were committed to `img/` via LFS — removed when images moved to Releases only. The two-flavor 24.10.6 pipeline (standard + daed, third-party TSV feeds and release-asset ipks) was replaced by a single-flavor 25.12.1 pipeline. That flavor was called `daed` until the profile also absorbed Tailscale, vnStat and open-vm-tools, at which point it was renamed `bypass` because the tag no longer described one component. Dedup records used to be committed back to `main` as `manifests/converted-images.json` plus a rendered `docs/converted-images.md`; that step could not work once the public repository protected `main` behind required pull requests, so dedup moved to the published Release tags and the record-pushing job was deleted.
 
 ### Conversion pipeline (`scripts/openwrt_img_to_ova.py`)
 
@@ -69,9 +68,16 @@ History: source-builds of LEDE/ImmortalWrt were abandoned (6h GitHub-hosted job 
 
 ### Dedup / idempotency
 
-Conversion key = `image_sha256:BUILDER_VERSION:repository_commit`, where `image_sha256` is the SHA256 of the whole built `.img.gz` and `repository_commit` is this builder repo's commit (`GITHUB_SHA`). Any package change that lands in the rootfs changes the image SHA; any commit on this repository changes the third field. Keys live in `manifests/converted-images.json`; `scan` skips keys already present, which drives the `count` output that gates the `publish` job. **Bump `BUILDER_VERSION` in `scripts/openwrt_img_to_ova.py` whenever conversion logic or release tag semantics change.** It was bumped to 13 when the conversion key and tag started including the builder commit.
+The published Releases are the only dedup state. `scan` builds a matcher from the image SHA and the builder commit and skips the image when any existing tag matches, which drives the `count` output that gates the `publish` job. The matcher (`published_tag_pattern`) deliberately wildcards the build date, because that is the only tag component that can differ between two runs producing byte-identical artifacts:
 
-Because the keys are committed, copying `manifests/converted-images.json` into another repository makes that repository treat the same image as already published, and `publish` silently skips. Prune foreign records when mirroring the tree.
+```
+openwrt-<base>-<YYYYMMDD>-<immortalwrt_commit>-<builder_sha12>-<image_sha12>
+                ^ wildcarded    ^ wildcarded      ^ compared      ^ compared
+```
+
+Any package change landing in the rootfs changes the image SHA; any commit on this repository changes the builder SHA. `BUILDER_VERSION` no longer participates in dedup — a `BUILDER_VERSION` bump requires a commit, which already changes the builder SHA — so it survives only as a provenance marker in release notes and `build-metadata.json`. Keep bumping it when conversion logic or tag semantics change; it was last bumped to 14 when dedup moved from a committed manifest to published Release tags.
+
+If `release-tags` cannot reach the API the step fails the build rather than silently republishing. Because no dedup state lives in git, mirroring this tree into another repository carries no "already published" verdicts with it; the new repository recomputes everything from its own Releases.
 
 Release cleanup is intentionally scoped to automatic bypass, daed, and standard tags:
 

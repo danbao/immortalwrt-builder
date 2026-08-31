@@ -19,12 +19,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "13"
+BUILDER_VERSION = "14"
+# Excludes "-" so a tag carrying a builder segment can never be matched by the
+# pattern built for tags without one.
+IMMORTALWRT_COMMIT_TAG_CHARS = r"[0-9A-Za-z._]+"
 
 
 @dataclass(frozen=True)
 class BuildResult:
-    key: str
     release_tag: str
     release_title: str
     image_asset: str
@@ -63,10 +65,39 @@ def release_display_name(base_name: str) -> str:
     return base_name
 
 
-def conversion_key(image_sha: str, repository_commit: str | None = None) -> str:
+def published_tag_pattern(base_name: str, short_image: str, repository_commit: str | None) -> re.Pattern[str]:
+    """Build a matcher for release tags that already publish this image and builder tree.
+
+    The build date is the only tag component that can differ between two runs
+    producing byte-identical artifacts, so it is matched loosely.
+    """
+    base = re.escape(base_name)
+    image = re.escape(short_image)
     if repository_commit:
-        return f"{image_sha}:{BUILDER_VERSION}:{sanitize_tag_component(repository_commit)}"
-    return f"{image_sha}:{BUILDER_VERSION}"
+        builder = re.escape(sanitize_tag_component(repository_commit)[:12])
+        return re.compile(rf"openwrt-{base}-\d{{8}}-{IMMORTALWRT_COMMIT_TAG_CHARS}-{builder}-{image}")
+    return re.compile(rf"openwrt-{base}-(?:\d{{8}}-{IMMORTALWRT_COMMIT_TAG_CHARS}-)?{image}")
+
+
+def read_known_tags(path: Path) -> list[str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    tags = payload.get("tags") if isinstance(payload, dict) else payload
+    if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+        raise ValueError(f"published tag file must declare a list of tag strings: {path}")
+    return tags
+
+
+def find_published_tag(
+    known_tags: list[str],
+    base_name: str,
+    short_image: str,
+    repository_commit: str | None,
+) -> str | None:
+    pattern = published_tag_pattern(base_name, short_image, repository_commit)
+    for tag in known_tags:
+        if pattern.fullmatch(tag):
+            return tag
+    return None
 
 
 def release_metadata(
@@ -127,12 +158,6 @@ def require_tools(names: list[str]) -> None:
     missing = [name for name in names if shutil.which(name) is None]
     if missing:
         raise RuntimeError(f"missing required tools: {', '.join(missing)}")
-
-
-def read_manifest(path: Path) -> dict:
-    if not path.exists():
-        return {"builder_version": BUILDER_VERSION, "conversions": {}}
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -421,7 +446,6 @@ def build_image(
     image_sha = sha256_file(image)
     base_name = sanitize_name(image.name)
     short_image = image_sha[:12]
-    key = conversion_key(image_sha, repository_commit)
     release_tag, release_title, artifact_name = release_metadata(
         base_name,
         short_image,
@@ -451,7 +475,6 @@ def build_image(
         checksum.write_text(f"{sha256_file(ova)}  {ova.name}\n", encoding="utf-8")
 
     return BuildResult(
-        key=key,
         release_tag=release_tag,
         release_title=release_title,
         image_asset=image_asset,
@@ -470,7 +493,6 @@ def build_image(
 
 def result_to_dict(result: BuildResult) -> dict[str, str]:
     return {
-        "key": result.key,
         "release_tag": result.release_tag,
         "release_title": result.release_title,
         "image_asset": result.image_asset,
@@ -519,17 +541,20 @@ def validate_release_metadata(
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    manifest = read_manifest(args.manifest)
-    conversions = manifest.get("conversions", {})
+    known_tags = read_known_tags(args.known_tags) if args.known_tags else []
     release_date, immortalwrt_version_code, immortalwrt_commit, repository_commit = validate_release_metadata(args)
     built: list[dict[str, str]] = []
     skipped = 0
     for image in discover_images(args.img_dir):
-        image_sha = sha256_file(image)
-        key = conversion_key(image_sha, repository_commit)
-        if key in conversions:
+        published = find_published_tag(
+            known_tags,
+            sanitize_name(image.name),
+            sha256_file(image)[:12],
+            repository_commit,
+        )
+        if published:
             skipped += 1
-            print(f"skip already converted: {image}")
+            print(f"skip already published as {published}: {image}")
             continue
         print(f"build pending image: {image}")
         built.append(
@@ -547,29 +572,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
         )
     write_json(args.results, {"built": built, "skipped": skipped})
     print(f"built {len(built)} image(s), skipped {skipped}")
-    return 0
-
-
-def cmd_record(args: argparse.Namespace) -> int:
-    results = json.loads(args.results.read_text(encoding="utf-8"))
-    manifest = read_manifest(args.manifest)
-    conversions = manifest.setdefault("conversions", {})
-    for item in results.get("built", []):
-        conversions[item["key"]] = {
-            "image_path": item["image_path"],
-            "image_asset": item.get("image_asset", Path(item["image_path"]).name),
-            "image_sha256": item["image_sha256"],
-            "builder_version": item["builder_version"],
-            "release_tag": item["release_tag"],
-            "release_date": item.get("release_date"),
-            "immortalwrt_version_code": item.get("immortalwrt_version_code"),
-            "immortalwrt_commit": item.get("immortalwrt_commit"),
-            "ova_asset": Path(item["ova_path"]).name,
-            "checksum_asset": Path(item["checksum_path"]).name,
-        }
-    manifest["builder_version"] = BUILDER_VERSION
-    write_json(args.manifest, manifest)
-    write_converted_doc(args.doc, manifest)
     return 0
 
 
@@ -599,42 +601,13 @@ def cmd_prepare_assets(args: argparse.Namespace) -> int:
     return 0
 
 
-def write_converted_doc(path: Path, manifest: dict) -> None:
-    rows = []
-    conversions = manifest.get("conversions", {})
-    for item in sorted(conversions.values(), key=lambda value: value["release_tag"]):
-        rows.append(
-            "| `{release_tag}` | `{date}` | `{version_code}` | `{commit}` | `{image}` | `{image_sha}` | `{builder}` |".format(
-                release_tag=item["release_tag"],
-                date=item.get("release_date") or "_unknown_",
-                version_code=item.get("immortalwrt_version_code") or "_unknown_",
-                commit=item.get("immortalwrt_commit") or "_unknown_",
-                image=item.get("image_asset") or Path(item["image_path"]).name,
-                image_sha=item["image_sha256"][:12],
-                builder=item["builder_version"],
-            )
-        )
-    content = [
-        "# Converted Images",
-        "",
-        "This file is generated by the GitHub Actions workflow.",
-        "",
-        "| Release | Build Date | ImmortalWrt Version | ImmortalWrt Commit | Image | Image SHA | Builder |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
-        *(rows or ["| _None_ | _None_ | _None_ | _None_ | _None_ | _None_ | _None_ |"]),
-        "",
-    ]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(content), encoding="utf-8")
-
-
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    scan = subparsers.add_parser("scan", help="build all unconverted images")
+    scan = subparsers.add_parser("scan", help="build every image that has no published release yet")
     scan.add_argument("--img-dir", type=Path, default=Path("img"))
-    scan.add_argument("--manifest", type=Path, default=Path("manifests/converted-images.json"))
+    scan.add_argument("--known-tags", type=Path, help="published release tags recorded by preflight release-tags")
     scan.add_argument("--out-dir", type=Path, default=Path("dist"))
     scan.add_argument("--results", type=Path, default=Path("dist/build-results.json"))
     scan.add_argument("--nic-count", type=int, default=6)
@@ -643,12 +616,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     scan.add_argument("--immortalwrt-commit", help="ImmortalWrt source commit id")
     scan.add_argument("--repository-commit", help="builder repository commit that produced this image")
     scan.set_defaults(func=cmd_scan)
-
-    record = subparsers.add_parser("record", help="record successfully published builds")
-    record.add_argument("--results", type=Path, default=Path("dist/build-results.json"))
-    record.add_argument("--manifest", type=Path, default=Path("manifests/converted-images.json"))
-    record.add_argument("--doc", type=Path, default=Path("docs/converted-images.md"))
-    record.set_defaults(func=cmd_record)
 
     prepare_assets = subparsers.add_parser("prepare-assets", help="prepare auditable release assets")
     prepare_assets.add_argument("--results", type=Path, required=True)

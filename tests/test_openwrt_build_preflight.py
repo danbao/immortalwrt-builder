@@ -213,6 +213,37 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             self.assertEqual(collected["image"], output / "immortalwrt-x86-64-bypass.img.gz")
             self.assertEqual((output / "final-image.manifest").read_text(encoding="utf-8"), "daed - 1\n")
 
+    def test_fetch_release_tags_follows_pagination_and_drops_empty_tags(self) -> None:
+        pages = {
+            1: [{"tag_name": "openwrt-b"}, {"tag_name": "openwrt-a"}],
+            2: [{"tag_name": ""}, {"tag_name": "openwrt-a"}],
+        }
+        requested: list[str] = []
+
+        def fake_fetch_bytes(url: str, **_: object) -> bytes:
+            requested.append(url)
+            page = int(url.rsplit("page=", 1)[1])
+            return json.dumps(pages.get(page, [])).encode("utf-8")
+
+        original = preflight.fetch_bytes
+        preflight.fetch_bytes = fake_fetch_bytes
+        try:
+            tags = preflight.fetch_release_tags("owner/repo", timeout=1, retries=1, per_page=2)
+        finally:
+            preflight.fetch_bytes = original
+
+        self.assertEqual(tags, ["openwrt-a", "openwrt-b"])
+        self.assertEqual(len(requested), 3)
+
+    def test_fetch_release_tags_rejects_non_array_payloads(self) -> None:
+        original = preflight.fetch_bytes
+        preflight.fetch_bytes = lambda url, **_: b'{"message":"Not Found"}'
+        try:
+            with self.assertRaisesRegex(ValueError, "JSON array"):
+                preflight.fetch_release_tags("owner/repo", timeout=1, retries=1)
+        finally:
+            preflight.fetch_bytes = original
+
 
 if __name__ == "__main__":
     unittest.main()

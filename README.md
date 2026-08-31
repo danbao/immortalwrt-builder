@@ -1,6 +1,6 @@
 # ImmortalWrt x86_64 OVA Builder
 
-这个仓库用于自动构建面向虚拟化环境的 ImmortalWrt x86_64 固件，并把 ImageBuilder 生成的原始镜像转换成可直接导入 ESXi 的 OVA。构建产物通过 GitHub Releases 发布，仓库本身只保存脚本、工作流和轻量级转换记录，不保存大型镜像文件。
+这个仓库用于自动构建面向虚拟化环境的 ImmortalWrt x86_64 固件，并把 ImageBuilder 生成的原始镜像转换成可直接导入 ESXi 的 OVA。构建产物通过 GitHub Releases 发布，仓库本身只保存脚本和工作流，不保存镜像文件，也不保存构建产生的记录。
 
 当前流程以 ImmortalWrt 25.12.1 官方 ImageBuilder 为基础，不从源码完整编译固件。每次构建产出单一 flavor：官方基础镜像、daed、Tailscale、vnStat 和 VMware Guest Tools。所有包均由 ImmortalWrt 官方签名源解析，不内置其他透明代理或 DNS 插件。
 
@@ -59,7 +59,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 - `validate`：只校验 ImageBuilder、安全配置和官方软件包 manifest。
 - `dry-run`：完整构建 IMG/OVA，但只保留 14 天 Actions Artifact。
-- `publish`（默认）：完整构建并发布 Release、更新转换记录。
+- `publish`（默认）：先读取已发布的 Release tag 做去重，再完整构建并发布 Release。
 
 定时任务固定使用 `publish`。
 
@@ -80,14 +80,16 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 4. 关闭 ISO、qcow2、VDI、VMDK、VHDX 等辅助镜像格式，只保留后续需要的 raw image。
 5. 读取 `config/build-profile.json`，执行 `make manifest`，验证 daed、Tailscale、vnStat、open-vm-tools 及其 LuCI 组件齐全，同时拒绝旧 `luci-app-daede` 及冲突代理组件。
 6. `validate` 模式到此结束；其他模式执行 `make image`，并强制要求恰好一个 raw image、一个最终 manifest 和一个 CycloneDX SBOM。
-7. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，再由 `prepare-assets` 生成统一校验和、供应链元数据和确定性 buildinfo 归档。
-8. `dry-run` 只上传临时 Artifact；`publish` 将一日有效的交接 Artifact 传给 GitHub 托管发布 job。
-9. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 创建 Release；发布端重新限制 tag 和资产路径，并逐项复验 `.ova.sha256` 与 `SHA256SUMS`，不直接信任构建 runner 的交接声明。已有 Release 视为不可变，只在远端 digest 完全一致时作为幂等成功，禁止覆盖历史资产。
-10. 发布成功后由 `scripts/update_release_records.py` 确定性重建 `manifests/converted-images.json` 和 `docs/converted-images.md`；遇到并发 push 冲突会拉取最新目标分支并最多重试三次。Release 不会因记录提交失败而回滚。
+7. `publish` 模式下先用 `scripts/openwrt_build_preflight.py release-tags` 拉取仓库已发布的 Release tag，供下一步判断是否需要发布。
+8. 调用 `scripts/openwrt_img_to_ova.py scan` 转换 OVA，再由 `prepare-assets` 生成统一校验和、供应链元数据和确定性 buildinfo 归档。
+9. `dry-run` 只上传临时 Artifact；`publish` 将一日有效的交接 Artifact 传给 GitHub 托管发布 job。
+10. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 创建 Release；发布端重新限制 tag 和资产路径，并逐项复验 `.ova.sha256` 与 `SHA256SUMS`，不直接信任构建 runner 的交接声明。已有 Release 视为不可变，只在远端 digest 完全一致时作为幂等成功，禁止覆盖历史资产。
 
-转换记录使用 `image_sha256:BUILDER_VERSION:repository_commit` 作为去重 key。`image_sha256` 是整个 `.img.gz` 产物的 SHA256，因此任何进入 rootfs 的包变化都会改变它；`repository_commit` 是本仓库构建这次镜像时的 commit。镜像内容和 builder 仓库都没变时不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit、builder commit 前 12 位和镜像 SHA 前 12 位。定时 workflow 只代表定期检查和构建，两者都没变时不会发布新 Release。README 改动这类不改变镜像的 commit 仍会发出新 Release，因为 builder commit 变了。Release 清理按 bypass family 保留最近 30 个；历史 daed 与 standard family 也继续各按最近 30 个修剪。
+去重的唯一依据是已发布的 Release tag，仓库内不再保存转换记录。`publish` 模式下，`scripts/openwrt_build_preflight.py release-tags` 先把仓库现有 Release tag 写入 `build-out/published-tags.json`，`scan` 再据此判断当前镜像是否已经发布过。
 
-因为去重 key 存放在仓库内的 `manifests/converted-images.json`，把这份清单复制到另一个仓库会让对方把同一镜像视为「已发布」。跨仓库迁移时应清理不属于该仓库的记录。
+Release tag 形如 `openwrt-immortalwrt-x86-64-bypass-<构建日期>-<ImmortalWrt commit>-<builder commit 前 12 位>-<镜像 SHA 前 12 位>`。判定时忽略构建日期，只比较 builder commit 和镜像 SHA：镜像内容变了 SHA 就变，本仓库有任何 commit builder 段就变，两者都没变则跳过转换与发布。因此 README 改动这类不影响镜像的 commit 仍会发出新 Release。`dry-run` 不读取 tag 列表，总是完整构建。Release 清理按 bypass family 保留最近 30 个；历史 daed 与 standard family 也继续各按最近 30 个修剪。
+
+去重状态完全存放在 Release 里，因此把这棵树镜像到另一个仓库不会带过去任何「已发布」判断，新仓库会按自己的 Release 列表重新计算。
 
 ## 内置组件与运行注意事项
 
@@ -152,39 +154,36 @@ uci commit daed
 sudo apt-get install -y qemu-utils
 ```
 
-扫描目录中的 `.img` 或 `.img.gz`，并把未记录过的镜像转换为 OVA：
+扫描目录中的 `.img` 或 `.img.gz`，并把镜像转换为 OVA。不传 `--known-tags` 时不做去重，总是转换：
 
 ```bash
 python3 scripts/openwrt_img_to_ova.py scan \
   --img-dir <dir-with-img-files> \
-  --manifest manifests/converted-images.json \
   --out-dir dist \
   --results dist/build-results.json \
   --nic-count 1
 ```
 
-如果需要在本地生成与 CI 一致的 release tag，可以显式传入元数据：
+如果需要在本地生成与 CI 一致的 release tag，可以显式传入元数据；同时传入 `--known-tags` 就能复现 CI 的跳过判断：
 
 ```bash
+python3 scripts/openwrt_build_preflight.py release-tags \
+  --repo danbao/immortalwrt-builder \
+  --output dist/published-tags.json
+
 python3 scripts/openwrt_img_to_ova.py scan \
   --img-dir <dir-with-img-files> \
-  --manifest manifests/converted-images.json \
+  --known-tags dist/published-tags.json \
   --out-dir dist \
   --results dist/build-results.json \
   --nic-count 1 \
   --release-date 20260616 \
   --immortalwrt-version-code r33869-cf234f8de6d5 \
-  --immortalwrt-commit cf234f8de6d5
+  --immortalwrt-commit cf234f8de6d5 \
+  --repository-commit "$(git rev-parse HEAD)"
 ```
 
-转换完成后，`dist/` 会包含 `.ova`、`.ovf`、`.vmdk`、`.mf` 和 `.ova.sha256`。如果这些产物已经发布，可以更新转换记录：
-
-```bash
-python3 scripts/openwrt_img_to_ova.py record \
-  --results dist/build-results.json \
-  --manifest manifests/converted-images.json \
-  --doc docs/converted-images.md
-```
+转换完成后，`dist/` 会包含 `.ova`、`.ovf`、`.vmdk`、`.mf` 和 `.ova.sha256`。
 
 发布 GitHub Release 需要已认证的 GitHub CLI。应先使用 `prepare-assets` 生成并在 `build-results.json` 中声明完整资产；以下参数按本地 ImageBuilder 输出调整：
 
@@ -217,7 +216,7 @@ python3 scripts/publish_releases.py dist/build-results.json \
 
 ## 维护指南
 
-核心脚本保持无第三方 Python 依赖，优先使用标准库和显式 subprocess 参数列表。修改转换逻辑、OVF 模板、虚拟硬件默认值、Release tag 或产物命名规则时，必须同步递增 `scripts/openwrt_img_to_ova.py` 中的 `BUILDER_VERSION`，否则旧 manifest 记录可能导致新逻辑不被重新应用。
+核心脚本保持无第三方 Python 依赖，优先使用标准库和显式 subprocess 参数列表。修改转换逻辑、OVF 模板、虚拟硬件默认值、Release tag 或产物命名规则时，同步递增 `scripts/openwrt_img_to_ova.py` 中的 `BUILDER_VERSION`。它现在只作为产物溯源标记出现在 Release 说明和 `build-metadata.json` 里，不再参与去重——去重由 tag 中的 builder commit 覆盖，任何逻辑变更都必然伴随一次 commit。
 
 不要提交构建产物。以下路径和文件类型应保持忽略状态：
 
@@ -250,9 +249,9 @@ ruby -e 'require "yaml"; YAML.load_file(".github/workflows/build-openwrt.yml"); 
 
 缺少 `.manifest` 或 `.bom.cdx.json`：ImageBuilder 没有为最终镜像生成必需的审计资产，工作流会在 OVA 发布前中止。
 
-`skip already converted`：当前镜像 SHA256、`BUILDER_VERSION` 和 builder 仓库 commit 已存在于 `manifests/converted-images.json`。如果转换逻辑或 Release tag 规则确实变了，先递增 `BUILDER_VERSION`。
+`skip already published as ...`：同一 builder commit 与镜像 SHA 已经有对应 Release，`count` 为 0，`publish` job 会被跳过。这是预期行为；只有镜像内容或本仓库 commit 变化才会产生新 Release。
 
-GitHub Release 已存在：`publish_releases.py` 会复验全部托管资产；完全一致时幂等通过并保留人工添加的非托管资产，不一致时拒绝覆盖。记录修复仍可安全重跑。
+GitHub Release 已存在：`publish_releases.py` 会复验全部托管资产；完全一致时幂等通过并保留人工添加的非托管资产，不一致时拒绝覆盖。因此重跑同一次构建是安全的。
 
 Release 太多：发布脚本默认按 family 各保留最近 30 个自动 Release；如需调整，修改 workflow 中的 `--keep-releases` 参数。
 

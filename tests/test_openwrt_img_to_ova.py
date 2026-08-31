@@ -29,16 +29,71 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
             "immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def",
         )
 
-    def test_conversion_key_includes_builder_commit_when_present(self) -> None:
-        image_sha = "a" * 64
+    def test_published_tag_matches_same_image_and_builder_on_any_build_date(self) -> None:
+        known_tags = [
+            "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def",
+        ]
         self.assertEqual(
-            openwrt_img_to_ova.conversion_key(image_sha),
-            f"{image_sha}:{openwrt_img_to_ova.BUILDER_VERSION}",
+            openwrt_img_to_ova.find_published_tag(
+                known_tags,
+                "immortalwrt-x86-64-bypass",
+                "123abc456def",
+                "deadbeefcafebabe0123456789abcdef01234567",
+            ),
+            known_tags[0],
+        )
+
+    def test_published_tag_does_not_match_a_different_builder_commit(self) -> None:
+        known_tags = [
+            "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def",
+        ]
+        self.assertIsNone(
+            openwrt_img_to_ova.find_published_tag(
+                known_tags,
+                "immortalwrt-x86-64-bypass",
+                "123abc456def",
+                "0123456789abcdef0123456789abcdef01234567",
+            )
+        )
+
+    def test_published_tag_does_not_match_a_different_image(self) -> None:
+        known_tags = [
+            "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def",
+        ]
+        self.assertIsNone(
+            openwrt_img_to_ova.find_published_tag(
+                known_tags,
+                "immortalwrt-x86-64-bypass",
+                "fedcba987654",
+                "deadbeefcafebabe0123456789abcdef01234567",
+            )
+        )
+
+    def test_published_tag_without_builder_commit_ignores_builder_scoped_tags(self) -> None:
+        known_tags = [
+            "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def",
+        ]
+        self.assertIsNone(
+            openwrt_img_to_ova.find_published_tag(known_tags, "immortalwrt-x86-64-bypass", "123abc456def", None)
         )
         self.assertEqual(
-            openwrt_img_to_ova.conversion_key(image_sha, "deadbeefcafebabe0123456789abcdef01234567"),
-            f"{image_sha}:{openwrt_img_to_ova.BUILDER_VERSION}:deadbeefcafebabe0123456789abcdef01234567",
+            openwrt_img_to_ova.find_published_tag(
+                ["openwrt-immortalwrt-x86-64-bypass-123abc456def"],
+                "immortalwrt-x86-64-bypass",
+                "123abc456def",
+                None,
+            ),
+            "openwrt-immortalwrt-x86-64-bypass-123abc456def",
         )
+
+    def test_read_known_tags_accepts_declared_list_and_rejects_garbage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_s:
+            path = Path(tmp_s) / "published-tags.json"
+            path.write_text(json.dumps({"repository": "o/r", "tags": ["a", "b"]}), encoding="utf-8")
+            self.assertEqual(openwrt_img_to_ova.read_known_tags(path), ["a", "b"])
+            path.write_text(json.dumps({"tags": [1, 2]}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "list of tag strings"):
+                openwrt_img_to_ova.read_known_tags(path)
 
     def test_legacy_daed_release_metadata_still_resolves(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(

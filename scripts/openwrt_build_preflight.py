@@ -18,6 +18,7 @@ from pathlib import Path
 
 DEFAULT_USER_AGENT = "danbao-openwrt-builder"
 MAX_METADATA_BYTES = 4 * 1024 * 1024
+MAX_RELEASE_LIST_BYTES = 32 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 REQUIRED_IMAGEBUILDER_OPTIONS = (
     "CONFIG_SIGNED_PACKAGES",
@@ -230,15 +231,36 @@ def write_env(path: Path, values: dict[str, str]) -> None:
             handle.write(f"{key}={value}\n")
 
 
-def github_api_json(url: str, *, timeout: int, retries: int) -> dict:
-    return json.loads(fetch_bytes(url, timeout=timeout, retries=retries).decode("utf-8"))
+def github_api_list(url: str, *, timeout: int, retries: int) -> list:
+    payload = json.loads(
+        fetch_bytes(url, timeout=timeout, retries=retries, max_bytes=MAX_RELEASE_LIST_BYTES).decode("utf-8")
+    )
+    if not isinstance(payload, list):
+        raise ValueError(f"expected a JSON array from {url}")
+    return payload
 
 
-def release_api_url(repo: str, tag: str | None) -> str:
-    base = f"https://api.github.com/repos/{repo}/releases"
-    if tag and tag != "latest":
-        return f"{base}/tags/{tag}"
-    return f"{base}/latest"
+def fetch_release_tags(
+    repo: str,
+    *,
+    timeout: int,
+    retries: int,
+    per_page: int = 100,
+    max_pages: int = 20,
+) -> list[str]:
+    tags: set[str] = set()
+    for page in range(1, max_pages + 1):
+        url = f"https://api.github.com/repos/{repo}/releases?per_page={per_page}&page={page}"
+        batch = github_api_list(url, timeout=timeout, retries=retries)
+        for release in batch:
+            if not isinstance(release, dict):
+                raise ValueError(f"unexpected release entry from {url}")
+            tag = str(release.get("tag_name") or "")
+            if tag:
+                tags.add(tag)
+        if len(batch) < per_page:
+            return sorted(tags)
+    raise RuntimeError(f"release listing for {repo} exceeded {max_pages} pages")
 
 
 def cmd_imagebuilder_info(args: argparse.Namespace) -> int:
@@ -319,27 +341,13 @@ def cmd_collect_image_outputs(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_verify_records(args: argparse.Namespace) -> int:
-    manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    doc_text = args.doc.read_text(encoding="utf-8")
-    tags = {str(item.get("release_tag", "")) for item in manifest.get("conversions", {}).values()}
-
-    expected_tags = set(args.release_tag or [])
-    if args.check_latest_release:
-        repo = args.repo or os.environ.get("GITHUB_REPOSITORY")
-        if not repo:
-            raise ValueError("--repo or GITHUB_REPOSITORY is required for --check-latest-release")
-        release = github_api_json(release_api_url(repo, "latest"), timeout=args.timeout, retries=args.retries)
-        expected_tags.add(str(release.get("tag_name", "")))
-
-    for tag in sorted(expected_tags):
-        if not tag:
-            continue
-        if tag not in tags:
-            raise RuntimeError(f"release tag missing from manifest: {tag}")
-        if tag not in doc_text:
-            raise RuntimeError(f"release tag missing from docs: {tag}")
-        print(f"verified release record: {tag}")
+def cmd_release_tags(args: argparse.Namespace) -> int:
+    repo = args.repo or os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        raise ValueError("--repo or GITHUB_REPOSITORY is required")
+    tags = fetch_release_tags(repo, timeout=args.timeout, retries=args.retries)
+    write_json(args.output, {"repository": repo, "tags": tags})
+    print(f"recorded {len(tags)} published release tag(s) for {repo}")
     return 0
 
 
@@ -395,14 +403,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     collect_outputs.add_argument("--image-name", required=True)
     collect_outputs.set_defaults(func=cmd_collect_image_outputs)
 
-    verify_records = subparsers.add_parser("verify-records", help="verify manifest/docs contain expected release tags")
-    verify_records.add_argument("--manifest", type=Path, required=True)
-    verify_records.add_argument("--doc", type=Path, required=True)
-    verify_records.add_argument("--release-tag", action="append")
-    verify_records.add_argument("--check-latest-release", action="store_true")
-    verify_records.add_argument("--repo")
-    add_common_network_args(verify_records)
-    verify_records.set_defaults(func=cmd_verify_records)
+    release_tags = subparsers.add_parser("release-tags", help="record the release tags already published for a repository")
+    release_tags.add_argument("--repo")
+    release_tags.add_argument("--output", type=Path, required=True)
+    add_common_network_args(release_tags)
+    release_tags.set_defaults(func=cmd_release_tags)
 
     return parser.parse_args(argv)
 
