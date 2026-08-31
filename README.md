@@ -53,7 +53,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 ## 自动构建流程
 
-主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每周一 02:00（Asia/Shanghai）运行，且仅在偶数 ISO 周实际构建（双周构建）。默认 ImageBuilder 版本为 `25.12.1`。手动触发提供三种 `build_mode`：
+主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每天 02:00（Asia/Shanghai）运行。默认 ImageBuilder 版本为 `25.12.1`。手动触发提供三种 `build_mode`：
 
 - `validate`：只校验 ImageBuilder、安全配置和官方软件包 manifest。
 - `dry-run`：完整构建 IMG/OVA，但只保留 14 天 Actions Artifact。

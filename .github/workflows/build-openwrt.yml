@@ -25,8 +25,8 @@ on:
           - dry-run
           - validate
   schedule:
-    # Every Monday 02:00 Asia/Shanghai; the schedule job limits builds to even ISO weeks.
-    - cron: "0 18 * * 0"
+    # Daily 02:00 Asia/Shanghai.
+    - cron: "0 18 * * *"
 
 permissions:
   contents: read
@@ -41,30 +41,7 @@ env:
   BUILD_PROFILE_CONFIG: config/build-profile.json
 
 jobs:
-  schedule:
-    runs-on: ubuntu-24.04
-    outputs:
-      should_build: ${{ steps.check.outputs.should_build }}
-    steps:
-      - name: Check biweekly schedule
-        id: check
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
-            echo "should_build=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          iso_week="$(TZ=Asia/Shanghai date +%V)"
-          if [ "$((10#${iso_week} % 2))" -eq 0 ]; then
-            echo "should_build=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "should_build=false" >> "${GITHUB_OUTPUT}"
-          fi
-
   build:
-    needs: schedule
-    if: needs.schedule.outputs.should_build == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 60
     permissions:
