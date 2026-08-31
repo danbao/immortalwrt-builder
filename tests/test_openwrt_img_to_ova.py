@@ -11,7 +11,18 @@ import openwrt_img_to_ova
 
 
 class OpenWrtImgToOvaTests(unittest.TestCase):
-    def test_daed_release_metadata_uses_distinct_tag_title_and_assets(self) -> None:
+    def test_bypass_release_metadata_uses_distinct_tag_title_and_assets(self) -> None:
+        tag, title, artifact = openwrt_img_to_ova.release_metadata(
+            "immortalwrt-x86-64-bypass",
+            "123abc456def",
+            release_date="20260713",
+            immortalwrt_commit="cf234f8de6d5",
+        )
+        self.assertEqual(tag, "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-123abc456def")
+        self.assertEqual(title, "ImmortalWrt x86_64 bypass ESXi OVA - 20260713 cf234f8de6d5")
+        self.assertEqual(artifact, "immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-123abc456def")
+
+    def test_legacy_daed_release_metadata_still_resolves(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(
             "immortalwrt-x86-64-daed",
             "123abc456def",
@@ -40,7 +51,7 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
             out_dir = tmp / "dist"
             source_dir.mkdir()
             out_dir.mkdir()
-            image = source_dir / "immortalwrt-x86-64-daed.img.gz"
+            image = source_dir / "immortalwrt-x86-64-bypass.img.gz"
             image.write_bytes(b"raw-image")
             ova = out_dir / "demo.ova"
             ova.write_bytes(b"ova")
@@ -80,7 +91,7 @@ class OpenWrtImgToOvaTests(unittest.TestCase):
                     {
                         "built": [
                             {
-                                "release_tag": "openwrt-immortalwrt-x86-64-daed-20260713-cf-123abc456def",
+                                "release_tag": "openwrt-immortalwrt-x86-64-bypass-20260713-cf-123abc456def",
                                 "release_title": "Demo",
                                 "image_asset": "release.img.gz",
                                 "image_path": str(image),

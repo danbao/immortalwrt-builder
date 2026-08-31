@@ -126,7 +126,9 @@ def require_single_output(target_dir: Path, pattern: str, label: str) -> Path:
     return output
 
 
-def collect_image_outputs(target_dir: Path, image_glob: str, out_dir: Path) -> dict[str, Path]:
+def collect_image_outputs(target_dir: Path, image_glob: str, out_dir: Path, image_name: str) -> dict[str, Path]:
+    if not image_name.strip():
+        raise ValueError("image name must be a non-empty string")
     images = sorted(path for path in target_dir.glob(image_glob) if path.is_file())
     if len(images) != 1:
         raise ValueError(f"expected exactly one image matching {image_glob}, found {len(images)}")
@@ -137,7 +139,7 @@ def collect_image_outputs(target_dir: Path, image_glob: str, out_dir: Path) -> d
     sbom = require_single_output(target_dir, "*.bom.cdx.json", "SBOM")
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs = {
-        "image": out_dir / "immortalwrt-x86-64-daed.img.gz",
+        "image": out_dir / f"{image_name}.img.gz",
         "manifest": out_dir / "final-image.manifest",
         "sbom": out_dir / "final-image.bom.cdx.json",
     }
@@ -271,6 +273,7 @@ def cmd_validate_profile(args: argparse.Namespace) -> int:
     profile = load_build_profile(args.config)
     values = {
         "BUILD_PROFILE": profile["profile"],
+        "IMAGE_NAME": profile["name"],
         "ROOTFS_PARTSIZE": str(profile["rootfs_partsize"]),
         "NIC_COUNT": str(profile["nic_count"]),
         "IMAGE_GLOB": profile["image_glob"],
@@ -310,7 +313,7 @@ def cmd_validate_manifest(args: argparse.Namespace) -> int:
 
 
 def cmd_collect_image_outputs(args: argparse.Namespace) -> int:
-    outputs = collect_image_outputs(args.target_dir, args.image_glob, args.out_dir)
+    outputs = collect_image_outputs(args.target_dir, args.image_glob, args.out_dir, args.image_name)
     for name, path in outputs.items():
         print(f"{name}={path}")
     return 0
@@ -389,6 +392,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     collect_outputs.add_argument("--target-dir", type=Path, required=True)
     collect_outputs.add_argument("--image-glob", required=True)
     collect_outputs.add_argument("--out-dir", type=Path, required=True)
+    collect_outputs.add_argument("--image-name", required=True)
     collect_outputs.set_defaults(func=cmd_collect_image_outputs)
 
     verify_records = subparsers.add_parser("verify-records", help="verify manifest/docs contain expected release tags")

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "11"
+BUILDER_VERSION = "12"
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,8 @@ def sanitize_tag_component(value: str) -> str:
 
 
 def release_display_name(base_name: str) -> str:
+    if base_name == "immortalwrt-x86-64-bypass":
+        return "ImmortalWrt x86_64 bypass"
     if base_name == "immortalwrt-x86-64-daed":
         return "ImmortalWrt x86_64 daed"
     if base_name == "immortalwrt-x86-64":

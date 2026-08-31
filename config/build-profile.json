@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "immortalwrt-x86-64-daed",
+  "name": "immortalwrt-x86-64-bypass",
   "profile": "generic",
   "rootfs_partsize": 2048,
   "nic_count": 1,

@@ -9,7 +9,7 @@ This repository automates building ImmortalWrt 25.12.1 x86_64 images, converting
 - `sudo apt-get install -y qemu-utils`: installs `qemu-img`, required for local conversion.
 - `python3 scripts/openwrt_build_preflight.py validate-profile --config config/build-profile.json`: validates the centralized single build profile and prints workflow values.
 - `python3 scripts/openwrt_build_preflight.py validate-imagebuilder --profile config/build-profile.json --config imagebuilder/.config`: asserts the required signature, TLS, manifest, and CycloneDX SBOM options.
-- `python3 scripts/openwrt_build_preflight.py validate-manifest --profile config/build-profile.json --manifest build-out/official.packages.manifest --metadata-out build-out/official-packages.json`: validates the official daed package set and records versions.
+- `python3 scripts/openwrt_build_preflight.py validate-manifest --profile config/build-profile.json --manifest build-out/official.packages.manifest --metadata-out build-out/official-packages.json`: validates the official package set declared in the build profile and records versions.
 - `python3 scripts/openwrt_img_to_ova.py scan --img-dir <dir-with-img-files> --manifest manifests/converted-images.json --out-dir dist --results dist/build-results.json --nic-count 1`: converts unrecorded `.img` or `.img.gz` files into OVA artifacts. CI also passes `--release-date`, `--immortalwrt-version-code`, and `--immortalwrt-commit`.
 - `python3 scripts/openwrt_img_to_ova.py record --results dist/build-results.json --manifest manifests/converted-images.json --doc docs/converted-images.md`: records successfully published conversions.
 - `python3 scripts/publish_releases.py dist/build-results.json --keep-releases 30 --expected-repository-commit <commit> --expected-workflow-run-url <url>`: validates the release handoff against trusted run provenance, publishes all declared assets, and prunes older managed releases; requires authenticated `gh`.
@@ -22,7 +22,7 @@ Use Python 3 standard library only unless a new dependency is justified. Follow 
 
 ## Testing Guidelines
 
-Run `python3 -m unittest discover -s tests` for script changes; network-dependent commands are tested by mocking `fetch_bytes`/`download_url`. For conversion logic, release tags, or asset names, bump `BUILDER_VERSION` in `scripts/openwrt_img_to_ova.py` so prior manifest entries are not reused incorrectly. Verify generated `dist/build-results.json`, checksums, release metadata, asset names, cleanup behavior, and `docs/converted-images.md` before opening a PR.
+Run `python3 -m unittest discover -s tests` for script changes; network-dependent commands are tested by mocking `fetch_bytes`/`download_url`. For conversion logic, release tags, or asset names — including any change to the build profile `name` — bump `BUILDER_VERSION` in `scripts/openwrt_img_to_ova.py` so prior manifest entries are not reused incorrectly. Verify generated `dist/build-results.json`, checksums, release metadata, asset names, cleanup behavior, and `docs/converted-images.md` before opening a PR.
 
 ## Commit & Pull Request Guidelines
 

@@ -150,7 +150,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-      - name: Build official daed image
+      - name: Build official image
         if: env.BUILD_MODE != 'validate'
         run: |
           cd imagebuilder
@@ -164,7 +164,8 @@ jobs:
           python3 scripts/openwrt_build_preflight.py collect-image-outputs \
             --target-dir imagebuilder/bin/targets/x86/64 \
             --image-glob "${IMAGE_GLOB}" \
-            --out-dir build-out
+            --out-dir build-out \
+            --image-name "${IMAGE_NAME}"
           cd imagebuilder
           for info in config.buildinfo feeds.buildinfo version.buildinfo; do
             if [ -s "bin/targets/x86/64/${info}" ]; then
@@ -178,7 +179,8 @@ jobs:
         run: |
           conversion_manifest=manifests/converted-images.json
           if [ "${BUILD_MODE}" = "dry-run" ]; then
-            printf '{"builder_version":"%s","conversions":{}}\n' "11" > build-out/empty-conversions.json
+            builder_version="$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import openwrt_img_to_ova; print(openwrt_img_to_ova.BUILDER_VERSION)')"
+            printf '{"builder_version":"%s","conversions":{}}\n' "${builder_version}" > build-out/empty-conversions.json
             conversion_manifest=build-out/empty-conversions.json
           fi
           python3 scripts/openwrt_img_to_ova.py scan \
