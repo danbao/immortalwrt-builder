@@ -11,3 +11,12 @@ __pycache__/
 *.mf
 *.sha256
 .DS_Store
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_ed25519
+*.p12
+*.pfx
+credentials.json

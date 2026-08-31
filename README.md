@@ -254,6 +254,6 @@ Release 太多：发布脚本默认按 family 各保留最近 30 个自动 Relea
 
 ## 安全与配置
 
-保持仓库私有。不要提交固件镜像、运行时配置密钥、GitHub token、VPN 凭据、代理订阅或其他敏感配置。
+本仓库按公开源码维护。不要提交固件镜像、运行时配置密钥、GitHub token、VPN 凭据、代理订阅或其他敏感配置。
 
 ImageBuilder 版本和包列表会进入构建信任链，修改下载来源、校验逻辑、`config/build-profile.json` 或 GitHub Actions 固定 SHA 时必须进行安全审查。`files/` 覆盖层仅包含通用旁路由调优，不注入任何凭据。

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Single-workflow automation (`.github/workflows/build-openwrt.yml`): assembles ImmortalWrt 25.12.1 x86_64 firmware via the official ImageBuilder, converts it to ESXi-importable OVA files, and publishes GitHub Releases containing the `.ova`, `.ova.sha256`, and raw `.img.gz` (for PVE `qm importdisk`). The workflow builds a single daed flavor: official base packages plus `daed` and `luci-app-daede` from the kenzok8 daed feed. Release tags and asset names include build date, ImmortalWrt commit, and image SHA. **Images never enter git** — only small conversion records are committed back to `main` with `[skip ci]`.
 
-**Security: keep this repo private.** No secrets live in the codebase; if runtime config files are added later, keep them out of git.
+**Security: this repository is published as public source.** No secrets live in the codebase; if runtime config files are added later, keep them out of git.
 
 ## Commands
 

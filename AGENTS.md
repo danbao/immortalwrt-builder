@@ -30,4 +30,4 @@ Recent history uses concise subjects such as `feat: bypass-router tuning ...` an
 
 ## Security & Configuration Tips
 
-Keep this repository private. Do not commit firmware images, runtime secrets, GitHub tokens, or injected OpenWrt configuration containing credentials. Official ImmortalWrt packages are mandatory; do not add unsigned third-party APK feeds or fallback download paths. Treat ImageBuilder URLs, checksums, `config/build-profile.json`, and pinned GitHub Action SHAs as security-sensitive changes. Build jobs remain read-only, and only the isolated GitHub-hosted publish job may receive `contents: write`.
+Treat this repository as public source. Do not commit firmware images, runtime secrets, GitHub tokens, or injected OpenWrt configuration containing credentials. Official ImmortalWrt packages are mandatory; do not add unsigned third-party APK feeds or fallback download paths. Treat ImageBuilder URLs, checksums, `config/build-profile.json`, and pinned GitHub Action SHAs as security-sensitive changes. Build jobs remain read-only, and only the isolated GitHub-hosted publish job may receive `contents: write`.
