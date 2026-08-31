@@ -12,8 +12,15 @@ import sys
 from pathlib import Path
 
 RELEASE_TAG_FAMILY_PATTERNS = (
+    ("bypass", re.compile(r"^openwrt-immortalwrt-x86-64-bypass-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
     ("daed", re.compile(r"^openwrt-immortalwrt-x86-64-daed-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
     ("standard", re.compile(r"^openwrt-immortalwrt-x86-64-(?:[0-9a-f]{12}|\d{8}-[0-9a-f]+-[0-9a-f]{12})$")),
+)
+# Longest first so a more specific family never resolves to a shorter prefix.
+RELEASE_ASSET_FAMILY_PREFIXES = (
+    "immortalwrt-x86-64-bypass",
+    "immortalwrt-x86-64-daed",
+    "immortalwrt-x86-64",
 )
 ASSET_NAME_PATTERN = re.compile(
     r"^(?:immortalwrt-x86-64.*(?:\.img\.gz|\.ova|\.ova\.sha256|\.manifest|\.bom\.cdx\.json)|"
@@ -61,6 +68,13 @@ def managed_release_family(tag: str) -> str | None:
         if pattern.fullmatch(tag):
             return family
     return None
+
+
+def asset_family_prefix(artifact_name: str) -> str:
+    for prefix in RELEASE_ASSET_FAMILY_PREFIXES:
+        if artifact_name.startswith(f"{prefix}-"):
+            return prefix
+    raise ValueError(f"artifact name does not belong to a managed release family: {artifact_name!r}")
 
 
 def is_managed_asset_name(name: str) -> bool:
@@ -144,7 +158,7 @@ def validate_release_payload(
         raise ValueError(f"release tag does not match image asset: expected {expected_tag}, got {tag}")
 
     artifact_name = image_asset.removesuffix(".img.gz")
-    family_prefix = "immortalwrt-x86-64-daed" if artifact_name.startswith("immortalwrt-x86-64-daed-") else "immortalwrt-x86-64"
+    family_prefix = asset_family_prefix(artifact_name)
     artifact_suffix = artifact_name.removeprefix(f"{family_prefix}-")
     expected_ova_name = f"{family_prefix}-esxi-{artifact_suffix}.ova"
     expected_ova_checksum_name = f"{expected_ova_name}.sha256"

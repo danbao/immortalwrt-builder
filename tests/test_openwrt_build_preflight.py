@@ -175,18 +175,20 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             output = tmp / "out"
             target.mkdir()
             with self.assertRaisesRegex(ValueError, "exactly one image"):
-                preflight.collect_image_outputs(target, "*.img.gz", output)
+                preflight.collect_image_outputs(target, "*.img.gz", output, "immortalwrt-x86-64-bypass")
 
             first = target / "immortalwrt-25.12.1-x86-64-generic-squashfs-combined-efi.img.gz"
             second = target / "second.img.gz"
             first.write_bytes(b"first")
             second.write_bytes(b"second")
             with self.assertRaisesRegex(ValueError, "found 2"):
-                preflight.collect_image_outputs(target, "*.img.gz", output)
+                preflight.collect_image_outputs(target, "*.img.gz", output, "immortalwrt-x86-64-bypass")
 
             second.unlink()
+            with self.assertRaisesRegex(ValueError, "non-empty string"):
+                preflight.collect_image_outputs(target, "*.img.gz", output, "  ")
             with self.assertRaisesRegex(FileNotFoundError, "manifest"):
-                preflight.collect_image_outputs(target, "*.img.gz", output)
+                preflight.collect_image_outputs(target, "*.img.gz", output, "immortalwrt-x86-64-bypass")
 
             (target / "immortalwrt-25.12.1-x86-64-generic.manifest").write_text(
                 "daed - 1\n", encoding="utf-8"
@@ -198,17 +200,17 @@ class OpenWrtBuildPreflightTests(unittest.TestCase):
             duplicate_manifest = target / "duplicate.manifest"
             duplicate_manifest.write_text("other - 1\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "exactly one final image manifest"):
-                preflight.collect_image_outputs(target, "*.img.gz", output)
+                preflight.collect_image_outputs(target, "*.img.gz", output, "immortalwrt-x86-64-bypass")
             duplicate_manifest.unlink()
 
             duplicate_sbom = target / "duplicate.bom.cdx.json"
             duplicate_sbom.write_text("{}\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "exactly one final image SBOM"):
-                preflight.collect_image_outputs(target, "*.img.gz", output)
+                preflight.collect_image_outputs(target, "*.img.gz", output, "immortalwrt-x86-64-bypass")
             duplicate_sbom.unlink()
 
-            collected = preflight.collect_image_outputs(target, "*.img.gz", output)
-            self.assertEqual(collected["image"], output / "immortalwrt-x86-64-daed.img.gz")
+            collected = preflight.collect_image_outputs(target, "*.img.gz", output, "immortalwrt-x86-64-bypass")
+            self.assertEqual(collected["image"], output / "immortalwrt-x86-64-bypass.img.gz")
             self.assertEqual((output / "final-image.manifest").read_text(encoding="utf-8"), "daed - 1\n")
 
 

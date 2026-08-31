@@ -17,13 +17,13 @@ class PublishReleasesTests(unittest.TestCase):
         image_body = b"raw-image"
         image_sha = hashlib.sha256(image_body).hexdigest()
         suffix = image_sha[:12]
-        image_name = f"immortalwrt-x86-64-daed-20260713-cf-{suffix}.img.gz"
+        image_name = f"immortalwrt-x86-64-bypass-20260713-cf-{suffix}.img.gz"
         names = [
             image_name,
-            f"immortalwrt-x86-64-daed-esxi-20260713-cf-{suffix}.ova",
-            f"immortalwrt-x86-64-daed-esxi-20260713-cf-{suffix}.ova.sha256",
-            f"immortalwrt-x86-64-daed-20260713-cf-{suffix}.manifest",
-            f"immortalwrt-x86-64-daed-20260713-cf-{suffix}.bom.cdx.json",
+            f"immortalwrt-x86-64-bypass-esxi-20260713-cf-{suffix}.ova",
+            f"immortalwrt-x86-64-bypass-esxi-20260713-cf-{suffix}.ova.sha256",
+            f"immortalwrt-x86-64-bypass-20260713-cf-{suffix}.manifest",
+            f"immortalwrt-x86-64-bypass-20260713-cf-{suffix}.bom.cdx.json",
             "build-metadata.json",
             "build-metadata.tar.gz",
             "setup-openwrt.sh",
@@ -78,7 +78,7 @@ class PublishReleasesTests(unittest.TestCase):
             "build_metadata": metadata,
         }
 
-    def test_managed_release_family_recognizes_standard_and_daed_tags(self) -> None:
+    def test_managed_release_family_recognizes_every_managed_tag_shape(self) -> None:
         self.assertEqual(
             publish_releases.managed_release_family("openwrt-immortalwrt-x86-64-20260713-cf234f8de6d5-123abc456def"),
             "standard",
@@ -87,7 +87,27 @@ class PublishReleasesTests(unittest.TestCase):
             publish_releases.managed_release_family("openwrt-immortalwrt-x86-64-daed-20260713-cf234f8de6d5-123abc456def"),
             "daed",
         )
+        self.assertEqual(
+            publish_releases.managed_release_family("openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-123abc456def"),
+            "bypass",
+        )
         self.assertIsNone(publish_releases.managed_release_family("manual-release"))
+
+    def test_asset_family_prefix_prefers_the_most_specific_family(self) -> None:
+        self.assertEqual(
+            publish_releases.asset_family_prefix("immortalwrt-x86-64-bypass-20260713-cf-123abc456def"),
+            "immortalwrt-x86-64-bypass",
+        )
+        self.assertEqual(
+            publish_releases.asset_family_prefix("immortalwrt-x86-64-daed-20260713-cf-123abc456def"),
+            "immortalwrt-x86-64-daed",
+        )
+        self.assertEqual(
+            publish_releases.asset_family_prefix("immortalwrt-x86-64-20260713-cf-123abc456def"),
+            "immortalwrt-x86-64",
+        )
+        with self.assertRaisesRegex(ValueError, "managed release family"):
+            publish_releases.asset_family_prefix("someone-elses-image-20260713")
 
     def test_release_asset_paths_require_explicit_nonempty_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:
@@ -122,6 +142,8 @@ class PublishReleasesTests(unittest.TestCase):
             {"tagName": "openwrt-immortalwrt-x86-64-20260712-cf-bbb222bbb222", "createdAt": "2026-07-12T00:00:00Z"},
             {"tagName": "openwrt-immortalwrt-x86-64-daed-20260713-cf-ccc333ccc333", "createdAt": "2026-07-13T00:00:00Z"},
             {"tagName": "openwrt-immortalwrt-x86-64-daed-20260712-cf-ddd444ddd444", "createdAt": "2026-07-12T00:00:00Z"},
+            {"tagName": "openwrt-immortalwrt-x86-64-bypass-20260713-cf-eee555eee555", "createdAt": "2026-07-13T00:00:00Z"},
+            {"tagName": "openwrt-immortalwrt-x86-64-bypass-20260712-cf-fff666fff666", "createdAt": "2026-07-12T00:00:00Z"},
         ]
         deleted: list[str] = []
 
@@ -135,6 +157,7 @@ class PublishReleasesTests(unittest.TestCase):
         self.assertEqual(
             deleted,
             [
+                "openwrt-immortalwrt-x86-64-bypass-20260712-cf-fff666fff666",
                 "openwrt-immortalwrt-x86-64-daed-20260712-cf-ddd444ddd444",
                 "openwrt-immortalwrt-x86-64-20260712-cf-bbb222bbb222",
             ],
@@ -156,7 +179,7 @@ class PublishReleasesTests(unittest.TestCase):
                     {"name": path.name, "digest": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"}
                     for path in assets
                 ),
-                {"name": "immortalwrt-x86-64-daed-old.ova.sha256"},
+                {"name": "immortalwrt-x86-64-bypass-old.ova.sha256"},
                 {"name": "manual-notes.txt"},
             ]
             with mock.patch.object(publish_releases, "release_exists", return_value=True), mock.patch.object(
@@ -167,7 +190,7 @@ class PublishReleasesTests(unittest.TestCase):
             self.assertFalse(any(command[:3] == ["gh", "release", "upload"] for command in calls))
             self.assertFalse(any(command[:3] == ["gh", "release", "edit"] for command in calls))
             deleted = [command[4] for command in calls if command[:3] == ["gh", "release", "delete-asset"]]
-            self.assertEqual(deleted, ["immortalwrt-x86-64-daed-old.ova.sha256"])
+            self.assertEqual(deleted, ["immortalwrt-x86-64-bypass-old.ova.sha256"])
 
     def test_existing_release_rejects_remote_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_s:

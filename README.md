@@ -21,18 +21,20 @@
 Release tag 使用构建日期、ImmortalWrt commit 和镜像 SHA 标识版本：
 
 ```text
-openwrt-immortalwrt-x86-64-daed-YYYYMMDD-<immortalwrt_commit>-<image_sha12>
+openwrt-immortalwrt-x86-64-bypass-YYYYMMDD-<immortalwrt_commit>-<image_sha12>
 ```
 
-例如 `openwrt-immortalwrt-x86-64-daed-20260616-cf234f8de6d5-12ab34cd56ef`。
+例如 `openwrt-immortalwrt-x86-64-bypass-20260616-cf234f8de6d5-12ab34cd56ef`。
 
-Release title 使用 `ImmortalWrt x86_64 daed ESXi OVA - YYYYMMDD <immortalwrt_commit>`。
+Release title 使用 `ImmortalWrt x86_64 bypass ESXi OVA - YYYYMMDD <immortalwrt_commit>`。
+
+镜像名来自 `config/build-profile.json` 的 `name` 字段。它标识整个包集，而不是其中某个组件；`20260831` 之前发布的 `-daed-` 标签是旧命名，仍然保留。
 
 新发布的资产文件名也使用同一组元数据，例如：
 
-- `immortalwrt-x86-64-daed-20260616-cf234f8de6d5-12ab34cd56ef.img.gz`
-- `immortalwrt-x86-64-daed-esxi-20260616-cf234f8de6d5-12ab34cd56ef.ova`
-- `immortalwrt-x86-64-daed-esxi-20260616-cf234f8de6d5-12ab34cd56ef.ova.sha256`
+- `immortalwrt-x86-64-bypass-20260616-cf234f8de6d5-12ab34cd56ef.img.gz`
+- `immortalwrt-x86-64-bypass-esxi-20260616-cf234f8de6d5-12ab34cd56ef.ova`
+- `immortalwrt-x86-64-bypass-esxi-20260616-cf234f8de6d5-12ab34cd56ef.ova.sha256`
 
 默认虚拟硬件由转换脚本生成：
 
@@ -45,8 +47,8 @@ Release title 使用 `ImmortalWrt x86_64 daed ESXi OVA - YYYYMMDD <immortalwrt_c
 PVE 使用原始镜像即可，示例：
 
 ```bash
-gzip -dk immortalwrt-x86-64-daed-20260616-cf234f8de6d5-12ab34cd56ef.img.gz
-qm importdisk <vmid> immortalwrt-x86-64-daed-20260616-cf234f8de6d5-12ab34cd56ef.img <storage>
+gzip -dk immortalwrt-x86-64-bypass-20260616-cf234f8de6d5-12ab34cd56ef.img.gz
+qm importdisk <vmid> immortalwrt-x86-64-bypass-20260616-cf234f8de6d5-12ab34cd56ef.img <storage>
 ```
 
 ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
@@ -83,7 +85,9 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 9. 发布脚本根据 `build-results.json` 中显式声明的 `release_assets` 创建 Release；发布端重新限制 tag 和资产路径，并逐项复验 `.ova.sha256` 与 `SHA256SUMS`，不直接信任构建 runner 的交接声明。已有 Release 视为不可变，只在远端 digest 完全一致时作为幂等成功，禁止覆盖历史资产。
 10. 发布成功后由 `scripts/update_release_records.py` 确定性重建 `manifests/converted-images.json` 和 `docs/converted-images.md`；遇到并发 push 冲突会拉取最新目标分支并最多重试三次。Release 不会因记录提交失败而回滚。
 
-转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。定时 workflow 只代表定期检查和构建，镜像 SHA 未变化时不会发布新 Release。Release 清理按 daed family 保留最近 30 个；历史 standard family 也继续按最近 30 个修剪。
+转换记录使用 `image_sha256:BUILDER_VERSION` 作为去重 key。`image_sha256` 是整个 `.img.gz` 产物的 SHA256，因此任何进入 rootfs 的包变化都会改变它。同一个镜像内容和同一个转换器版本不会重复转换；Release tag 额外包含构建日期、ImmortalWrt commit 和镜像 SHA 前 12 位，便于从 Release 页面追溯来源。定时 workflow 只代表定期检查和构建，镜像 SHA 未变化时不会发布新 Release。Release 清理按 bypass family 保留最近 30 个；历史 daed 与 standard family 也继续各按最近 30 个修剪。
+
+因为去重 key 存放在仓库内的 `manifests/converted-images.json`，把这份清单复制到另一个仓库会让对方把同一镜像视为「已发布」。跨仓库迁移时应清理不属于该仓库的记录。
 
 ## 内置组件与运行注意事项
 
@@ -226,7 +230,7 @@ python3 scripts/publish_releases.py dist/build-results.json \
 - `*.mf`
 - `*.sha256`
 
-调整 profile、内置包、rootfs 或输出匹配规则时，只修改 `config/build-profile.json`。`required_packages` 是构建安全门，`forbidden_packages` 用于阻止旧 daede 和冲突代理栈重新混入镜像。
+调整 profile、内置包、rootfs 或输出匹配规则时，只修改 `config/build-profile.json`。`required_packages` 是构建安全门，`forbidden_packages` 用于阻止旧 daede 和冲突代理栈重新混入镜像。`name` 决定镜像文件名、Release tag 与资产名，改动它属于 Release tag 语义变更，必须同时递增 `scripts/openwrt_img_to_ova.py` 的 `BUILDER_VERSION`，并在 `scripts/publish_releases.py` 中补上对应的 family 规则。
 
 维护预检脚本时使用标准库，相关轻量测试位于 `tests/`。常用检查命令：
 
