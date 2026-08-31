@@ -11,16 +11,34 @@ import openwrt_img_to_ova
 
 
 class OpenWrtImgToOvaTests(unittest.TestCase):
-    def test_bypass_release_metadata_uses_distinct_tag_title_and_assets(self) -> None:
+    def test_bypass_release_metadata_includes_builder_commit_in_tag_and_assets(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(
             "immortalwrt-x86-64-bypass",
             "123abc456def",
             release_date="20260713",
             immortalwrt_commit="cf234f8de6d5",
+            repository_commit="deadbeefcafebabe0123456789abcdef01234567",
         )
-        self.assertEqual(tag, "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-123abc456def")
-        self.assertEqual(title, "ImmortalWrt x86_64 bypass ESXi OVA - 20260713 cf234f8de6d5")
-        self.assertEqual(artifact, "immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-123abc456def")
+        self.assertEqual(
+            tag,
+            "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def",
+        )
+        self.assertEqual(title, "ImmortalWrt x86_64 bypass ESXi OVA - 20260713 cf234f8de6d5 (deadbeefcafe)")
+        self.assertEqual(
+            artifact,
+            "immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def",
+        )
+
+    def test_conversion_key_includes_builder_commit_when_present(self) -> None:
+        image_sha = "a" * 64
+        self.assertEqual(
+            openwrt_img_to_ova.conversion_key(image_sha),
+            f"{image_sha}:{openwrt_img_to_ova.BUILDER_VERSION}",
+        )
+        self.assertEqual(
+            openwrt_img_to_ova.conversion_key(image_sha, "deadbeefcafebabe0123456789abcdef01234567"),
+            f"{image_sha}:{openwrt_img_to_ova.BUILDER_VERSION}:deadbeefcafebabe0123456789abcdef01234567",
+        )
 
     def test_legacy_daed_release_metadata_still_resolves(self) -> None:
         tag, title, artifact = openwrt_img_to_ova.release_metadata(

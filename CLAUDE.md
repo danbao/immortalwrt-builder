@@ -26,7 +26,8 @@ python3 scripts/openwrt_img_to_ova.py scan \
   --nic-count 1 \
   --release-date 20260616 \
   --immortalwrt-version-code r33869-cf234f8de6d5 \
-  --immortalwrt-commit cf234f8de6d5
+  --immortalwrt-commit cf234f8de6d5 \
+  --repository-commit deadbeefcafebabe
 
 # Record published builds into manifest + docs (normally done by CI)
 python3 scripts/openwrt_img_to_ova.py record \
@@ -50,7 +51,7 @@ ruby -e 'require "yaml"; YAML.load_file(".github/workflows/build-openwrt.yml"); 
 One job, triggered by `workflow_dispatch` or a daily schedule (02:00 Asia/Shanghai). Steps in order:
 
 1. **ImageBuilder assembly** — defaults to `IB_VERSION=25.12.1`, `IB_TARGET=x86/64` (APK-based); manual dispatch can override `ib_version`, pick the `runner` (`ubuntu-latest` or `self-hosted`; scheduled runs always use `ubuntu-latest`), and set `publish_release=false` for dry-run experiments. A cleanup step removes `imagebuilder/`, `build-out/`, `dist/`, and the IB archive first because self-hosted workspaces persist between runs. The workflow resolves the upstream `sha256sums` entry before downloading the ImageBuilder. Auxiliary image formats (ISO/qcow2/VDI/VMDK/VHDX) are sed-disabled in the IB `.config` because each needs extra host tools (xorriso, qemu-img) and nothing downstream consumes them.
-2. **Release metadata** — reads upstream `version.buildinfo` for values like `r37978-cd0a06bfd3fd`, extracts the ImmortalWrt commit, and combines it with the Asia/Shanghai build date for release tags and asset names like `openwrt-immortalwrt-x86-64-bypass-20260831-cd0a06bfd3fd-<image_sha12>` and `immortalwrt-x86-64-bypass-esxi-20260831-cd0a06bfd3fd-<image_sha12>.ova`.
+2. **Release metadata** — reads upstream `version.buildinfo` for values like `r37978-cd0a06bfd3fd`, extracts the ImmortalWrt commit, and combines it with the Asia/Shanghai build date and this repository's `GITHUB_SHA` for release tags and asset names like `openwrt-immortalwrt-x86-64-bypass-20260831-cd0a06bfd3fd-<builder_sha12>-<image_sha12>` and `immortalwrt-x86-64-bypass-esxi-20260831-cd0a06bfd3fd-<builder_sha12>-<image_sha12>.ova`.
 3. **Packages** — every package resolves from the official signed ImmortalWrt 25.12.1 feeds. There is no third-party APK feed and no fallback download path; do not reintroduce one. The full set lives in `config/build-profile.json` (`packages`), gated by `required_packages` and `forbidden_packages`. `validate-profile` exports `BUILD_PROFILE`, `IMAGE_NAME`, `ROOTFS_PARTSIZE`, `NIC_COUNT`, `IMAGE_GLOB`, and `BUILD_PACKAGES` into `GITHUB_ENV`.
 4. **Build** — `make manifest PROFILE="${BUILD_PROFILE}" PACKAGES="${BUILD_PACKAGES}"` first, then `validate-manifest` asserts every `required_packages` entry is present and rejects `forbidden_packages` (the retired `luci-app-daede` plus PassWall2, OpenClash, Nikki/Mihomo, and MosDNS). Then it clears `bin/targets/x86/64` and runs `make image PROFILE=... FILES=${GITHUB_WORKSPACE}/files ROOTFS_PARTSIZE=... PACKAGES=...`. `collect-image-outputs` copies the single matching image to `build-out/${IMAGE_NAME}.img.gz` and requires exactly one `.manifest` and one `.bom.cdx.json`. Bypass-router tuning via `files/`: a sysctl overlay (BBR, raised conntrack limit, larger socket buffers, loose rp_filter, no redirects) and `uci-defaults` scripts that disable DHCP/RA on LAN, set hostname/timezone/NTP, select Argon as the default LuCI theme, enable packet steering, keep software flow offloading disabled for transparent-proxy safety, enable irqbalance, and leave daed disabled until the setup wizard provisions it.
 5. **Convert to OVA** — reuses `scripts/openwrt_img_to_ova.py scan` against `build-out/`, passing build date, ImmortalWrt version code, and commit metadata.
@@ -68,7 +69,7 @@ History: source-builds of LEDE/ImmortalWrt were abandoned (6h GitHub-hosted job 
 
 ### Dedup / idempotency
 
-Conversion key = `image_sha256:BUILDER_VERSION`, where `image_sha256` is the SHA256 of the whole built `.img.gz`, so any package change that lands in the rootfs changes it. Keys live in `manifests/converted-images.json`; `scan` skips keys already present, which drives the `count` output that gates the `publish` job. **Bump `BUILDER_VERSION` in `scripts/openwrt_img_to_ova.py` whenever conversion logic or release tag semantics change.** It was bumped to 12 when the profile name became `immortalwrt-x86-64-bypass`.
+Conversion key = `image_sha256:BUILDER_VERSION:repository_commit`, where `image_sha256` is the SHA256 of the whole built `.img.gz` and `repository_commit` is this builder repo's commit (`GITHUB_SHA`). Any package change that lands in the rootfs changes the image SHA; any commit on this repository changes the third field. Keys live in `manifests/converted-images.json`; `scan` skips keys already present, which drives the `count` output that gates the `publish` job. **Bump `BUILDER_VERSION` in `scripts/openwrt_img_to_ova.py` whenever conversion logic or release tag semantics change.** It was bumped to 13 when the conversion key and tag started including the builder commit.
 
 Because the keys are committed, copying `manifests/converted-images.json` into another repository makes that repository treat the same image as already published, and `publish` silently skips. Prune foreign records when mirroring the tree.
 
@@ -80,6 +81,7 @@ Release cleanup is intentionally scoped to automatic bypass, daed, and standard 
 - `openwrt-immortalwrt-x86-64-daed-<YYYYMMDD>-<commit>-<image_sha12>`
 - `openwrt-immortalwrt-x86-64-bypass-<image_sha12>`
 - `openwrt-immortalwrt-x86-64-bypass-<YYYYMMDD>-<commit>-<image_sha12>`
+- `openwrt-immortalwrt-x86-64-bypass-<YYYYMMDD>-<commit>-<builder_sha12>-<image_sha12>`
 
 Do not broaden that matcher without an explicit reason. Pruning is family-aware: each family keeps its own `--keep-releases` budget. Renaming the profile requires adding both a `RELEASE_TAG_FAMILY_PATTERNS` entry and a `RELEASE_ASSET_FAMILY_PREFIXES` entry (longest prefix first) in `scripts/publish_releases.py`.
 

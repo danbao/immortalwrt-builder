@@ -17,13 +17,13 @@ class PublishReleasesTests(unittest.TestCase):
         image_body = b"raw-image"
         image_sha = hashlib.sha256(image_body).hexdigest()
         suffix = image_sha[:12]
-        image_name = f"immortalwrt-x86-64-bypass-20260713-cf-{suffix}.img.gz"
+        image_name = f"immortalwrt-x86-64-bypass-20260713-cf-deadbeefcafe-{suffix}.img.gz"
         names = [
             image_name,
-            f"immortalwrt-x86-64-bypass-esxi-20260713-cf-{suffix}.ova",
-            f"immortalwrt-x86-64-bypass-esxi-20260713-cf-{suffix}.ova.sha256",
-            f"immortalwrt-x86-64-bypass-20260713-cf-{suffix}.manifest",
-            f"immortalwrt-x86-64-bypass-20260713-cf-{suffix}.bom.cdx.json",
+            f"immortalwrt-x86-64-bypass-esxi-20260713-cf-deadbeefcafe-{suffix}.ova",
+            f"immortalwrt-x86-64-bypass-esxi-20260713-cf-deadbeefcafe-{suffix}.ova.sha256",
+            f"immortalwrt-x86-64-bypass-20260713-cf-deadbeefcafe-{suffix}.manifest",
+            f"immortalwrt-x86-64-bypass-20260713-cf-deadbeefcafe-{suffix}.bom.cdx.json",
             "build-metadata.json",
             "build-metadata.tar.gz",
             "setup-openwrt.sh",
@@ -86,6 +86,12 @@ class PublishReleasesTests(unittest.TestCase):
         self.assertEqual(
             publish_releases.managed_release_family("openwrt-immortalwrt-x86-64-daed-20260713-cf234f8de6d5-123abc456def"),
             "daed",
+        )
+        self.assertEqual(
+            publish_releases.managed_release_family(
+                "openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-deadbeefcafe-123abc456def"
+            ),
+            "bypass",
         )
         self.assertEqual(
             publish_releases.managed_release_family("openwrt-immortalwrt-x86-64-bypass-20260713-cf234f8de6d5-123abc456def"),

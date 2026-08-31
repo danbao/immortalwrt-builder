@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-BUILDER_VERSION = "12"
+BUILDER_VERSION = "13"
 
 
 @dataclass(frozen=True)
@@ -63,25 +63,44 @@ def release_display_name(base_name: str) -> str:
     return base_name
 
 
+def conversion_key(image_sha: str, repository_commit: str | None = None) -> str:
+    if repository_commit:
+        return f"{image_sha}:{BUILDER_VERSION}:{sanitize_tag_component(repository_commit)}"
+    return f"{image_sha}:{BUILDER_VERSION}"
+
+
 def release_metadata(
     base_name: str,
     short_image: str,
     *,
     release_date: str | None = None,
     immortalwrt_commit: str | None = None,
+    repository_commit: str | None = None,
 ) -> tuple[str, str, str]:
     display_name = release_display_name(base_name)
     if release_date and immortalwrt_commit:
         release_date = sanitize_tag_component(release_date)
         immortalwrt_commit = sanitize_tag_component(immortalwrt_commit)
-        release_tag = "openwrt-{base}-{date}-{commit}-{image}".format(
-            base=base_name,
-            date=release_date,
-            commit=immortalwrt_commit,
-            image=short_image,
-        )
-        artifact_name = f"{base_name}-{release_date}-{immortalwrt_commit}-{short_image}"
-        release_title = f"{display_name} ESXi OVA - {release_date} {immortalwrt_commit}"
+        if repository_commit:
+            builder = sanitize_tag_component(repository_commit)[:12]
+            release_tag = "openwrt-{base}-{date}-{commit}-{builder}-{image}".format(
+                base=base_name,
+                date=release_date,
+                commit=immortalwrt_commit,
+                builder=builder,
+                image=short_image,
+            )
+            artifact_name = f"{base_name}-{release_date}-{immortalwrt_commit}-{builder}-{short_image}"
+            release_title = f"{display_name} ESXi OVA - {release_date} {immortalwrt_commit} ({builder})"
+        else:
+            release_tag = "openwrt-{base}-{date}-{commit}-{image}".format(
+                base=base_name,
+                date=release_date,
+                commit=immortalwrt_commit,
+                image=short_image,
+            )
+            artifact_name = f"{base_name}-{release_date}-{immortalwrt_commit}-{short_image}"
+            release_title = f"{display_name} ESXi OVA - {release_date} {immortalwrt_commit}"
     else:
         release_tag = f"openwrt-{base_name}-{short_image}"
         release_title = f"{display_name} ESXi OVA ({short_image})"
@@ -396,17 +415,19 @@ def build_image(
     release_date: str | None = None,
     immortalwrt_version_code: str | None = None,
     immortalwrt_commit: str | None = None,
+    repository_commit: str | None = None,
 ) -> BuildResult:
     require_tools(["qemu-img"])
     image_sha = sha256_file(image)
     base_name = sanitize_name(image.name)
     short_image = image_sha[:12]
-    key = f"{image_sha}:{BUILDER_VERSION}"
+    key = conversion_key(image_sha, repository_commit)
     release_tag, release_title, artifact_name = release_metadata(
         base_name,
         short_image,
         release_date=release_date,
         immortalwrt_commit=immortalwrt_commit,
+        repository_commit=repository_commit,
     )
     image_asset = f"{artifact_name}.img.gz"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -481,28 +502,31 @@ def discover_images(img_dir: Path) -> list[Path]:
     return sorted({path.resolve() for path in images if path.is_file()})
 
 
-def validate_release_metadata(args: argparse.Namespace) -> tuple[str | None, str | None, str | None]:
+def validate_release_metadata(
+    args: argparse.Namespace,
+) -> tuple[str | None, str | None, str | None, str | None]:
     release_date = args.release_date
     immortalwrt_version_code = args.immortalwrt_version_code
     immortalwrt_commit = args.immortalwrt_commit
-    if not any((release_date, immortalwrt_version_code, immortalwrt_commit)):
-        return None, None, None
-    if not release_date or not immortalwrt_commit:
-        raise ValueError("--release-date and --immortalwrt-commit must be provided together")
+    repository_commit = args.repository_commit
+    if not any((release_date, immortalwrt_version_code, immortalwrt_commit, repository_commit)):
+        return None, None, None, None
+    if not release_date or not immortalwrt_commit or not repository_commit:
+        raise ValueError("--release-date, --immortalwrt-commit and --repository-commit must be provided together")
     if not re.fullmatch(r"\d{8}", release_date):
         raise ValueError("--release-date must use YYYYMMDD format")
-    return release_date, immortalwrt_version_code, immortalwrt_commit
+    return release_date, immortalwrt_version_code, immortalwrt_commit, repository_commit
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
     manifest = read_manifest(args.manifest)
     conversions = manifest.get("conversions", {})
-    release_date, immortalwrt_version_code, immortalwrt_commit = validate_release_metadata(args)
+    release_date, immortalwrt_version_code, immortalwrt_commit, repository_commit = validate_release_metadata(args)
     built: list[dict[str, str]] = []
     skipped = 0
     for image in discover_images(args.img_dir):
         image_sha = sha256_file(image)
-        key = f"{image_sha}:{BUILDER_VERSION}"
+        key = conversion_key(image_sha, repository_commit)
         if key in conversions:
             skipped += 1
             print(f"skip already converted: {image}")
@@ -517,6 +541,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     release_date=release_date,
                     immortalwrt_version_code=immortalwrt_version_code,
                     immortalwrt_commit=immortalwrt_commit,
+                    repository_commit=repository_commit,
                 )
             )
         )
@@ -616,6 +641,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     scan.add_argument("--release-date", help="build/release date in YYYYMMDD format")
     scan.add_argument("--immortalwrt-version-code", help="ImmortalWrt version.buildinfo value")
     scan.add_argument("--immortalwrt-commit", help="ImmortalWrt source commit id")
+    scan.add_argument("--repository-commit", help="builder repository commit that produced this image")
     scan.set_defaults(func=cmd_scan)
 
     record = subparsers.add_parser("record", help="record successfully published builds")
