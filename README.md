@@ -2,7 +2,7 @@
 
 这个仓库用于自动构建面向虚拟化环境的 ImmortalWrt x86_64 固件，并把 ImageBuilder 生成的原始镜像转换成可直接导入 ESXi 的 OVA。构建产物通过 GitHub Releases 发布，仓库本身只保存脚本和工作流，不保存镜像文件，也不保存构建产生的记录。
 
-当前流程以 ImmortalWrt 25.12.1 官方 ImageBuilder 为基础，不从源码完整编译固件。每次构建产出单一 flavor：官方基础镜像、daed、Tailscale、vnStat 和 VMware Guest Tools。所有包均由 ImmortalWrt 官方签名源解析，不内置其他透明代理或 DNS 插件。
+当前流程以 ImmortalWrt 25.12.2 官方 ImageBuilder 为基础，不从源码完整编译固件。每次构建产出单一 flavor：官方基础镜像、daed、Tailscale、vnStat 和 VMware Guest Tools。所有包均由 ImmortalWrt 官方签名源解析，不内置其他透明代理或 DNS 插件。
 
 ## 产物说明
 
@@ -55,7 +55,7 @@ ESXi 直接下载 Release 中的 `.ova` 并通过 UI 导入。
 
 ## 自动构建流程
 
-主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每天 02:00（Asia/Shanghai）运行。默认 ImageBuilder 版本为 `25.12.1`。手动触发提供三种 `build_mode`：
+主流程定义在 `.github/workflows/build-openwrt.yml`，支持手动触发，也会按计划每天 02:00（Asia/Shanghai）运行。默认 ImageBuilder 版本为 `25.12.2`。手动触发提供三种 `build_mode`：
 
 - `validate`：只校验 ImageBuilder、安全配置和官方软件包 manifest。
 - `dry-run`：完整构建 IMG/OVA，但只保留 14 天 Actions Artifact。
@@ -198,7 +198,7 @@ python3 scripts/openwrt_img_to_ova.py prepare-assets \
   --package-metadata build-out/official-packages.json \
   --setup-wizard scripts/setup-openwrt.sh \
   --build-info-file build-out/imagebuilder.config \
-  --imagebuilder-version 25.12.1 \
+  --imagebuilder-version 25.12.2 \
   --imagebuilder-url <verified-imagebuilder-url> \
   --imagebuilder-sha256 <verified-imagebuilder-sha256> \
   --immortalwrt-version-code <version-code> \
