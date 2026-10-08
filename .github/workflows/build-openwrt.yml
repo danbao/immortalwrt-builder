@@ -14,7 +14,7 @@ on:
       ib_version:
         description: ImmortalWrt ImageBuilder version
         required: true
-        default: 25.12.1
+        default: 25.12.2
       build_mode:
         description: Validate only, build a temporary artifact, or publish a release
         required: true
@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '25.12.1' }}
+  IB_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.ib_version || '25.12.2' }}
   BUILD_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode || 'publish' }}
   BUILD_PROFILE_CONFIG: config/build-profile.json
 

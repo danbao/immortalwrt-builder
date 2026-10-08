@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-此基线让同一份 ImmortalWrt 25.12.1 IMG/OVA 同时适用于现机升级和异地新部署。镜像只包含官方签名软件与无隐私默认值，不包含任何密码、SSH 公钥、Dropbear 主机密钥、daed 数据库、订阅 URI、节点链接、Tailscale state 或现场备份。
+此基线让同一份 ImmortalWrt 25.12.2 IMG/OVA 同时适用于现机升级和异地新部署。镜像只包含官方签名软件与无隐私默认值，不包含任何密码、SSH 公钥、Dropbear 主机密钥、daed 数据库、订阅 URI、节点链接、Tailscale state 或现场备份。
 
 保持单 profile、单 IMG/OVA、一个网卡。旁路由只承担 IPv4 转发和透明代理；IPv6 地址、网关与 DNS 继续由主路由直接提供。
 
