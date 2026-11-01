@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload validation evidence
         if: env.BUILD_MODE == 'validate'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openwrt-validation-${{ env.IB_VERSION }}-${{ github.run_id }}
           path: |
@@ -250,7 +250,7 @@ jobs:
 
       - name: Upload dry-run payload
         if: env.BUILD_MODE == 'dry-run' && steps.convert.outputs.count != '0'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openwrt-dry-run-${{ env.IB_VERSION }}-${{ github.run_id }}
           path: |
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload publish handoff
         if: env.BUILD_MODE == 'publish' && steps.convert.outputs.count != '0'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openwrt-publish-${{ github.run_id }}
           path: dist/*
@@ -272,7 +272,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openwrt-failure-${{ github.run_id }}
           path: |
